@@ -338,7 +338,7 @@
         <button id="settingsBtn">⚙️</button>
         <span style="flex:1"></span>
         <span id="kbdHelp" class="hint">⌨️ קיצורים: קליק ימני לעריכת הטקסט · · · · · · Enter לשמירה · · · · · · Esc
-          לביטול
+          לביטול · · · · · · Ctrl+Z לביטל · · · · · · Ctrl+Shift+Z לשחזור
         </span>
         <span style="flex:1"></span>
         <button id="dlJson">⬇️ JSON</button>
@@ -813,12 +813,33 @@
             if (resume && !player.ended) try { player.play() } catch { };
           }
 
-          // Global Undo/Redo
+          // Global Undo/Redo (works on any keyboard layout + Mac/Windows/Linux)
           document.addEventListener('keydown', (e) => {
-            const isZ = (e.key === 'z' || e.key === 'Z');
-            if (e.ctrlKey && isZ && !e.shiftKey) { e.preventDefault(); if (undoStack.length) { redoStack.push(snapshot()); currentTokens = undoStack.pop(); data = tokensToData(currentTokens); render(); if (editBox) editBox.textContent = getFullText(); } }
-            else if (e.ctrlKey && e.shiftKey && isZ) { e.preventDefault(); if (redoStack.length) { undoStack.push(snapshot()); currentTokens = redoStack.pop(); data = tokensToData(currentTokens); render(); if (editBox) editBox.textContent = getFullText(); } }
+            const isZ = (e.code === 'KeyZ'); // layout-independent physical Z key
+            const isUndo = (e.ctrlKey || e.metaKey) && isZ && !e.shiftKey;
+            const isRedo = (e.ctrlKey || e.metaKey) && isZ && e.shiftKey;
+
+            if (isUndo) {
+              e.preventDefault();
+              if (undoStack.length) {
+                redoStack.push(snapshot());
+                currentTokens = undoStack.pop();
+                data = tokensToData(currentTokens);
+                render();
+                if (editBox) editBox.textContent = getFullText();
+              }
+            } else if (isRedo) {
+              e.preventDefault();
+              if (redoStack.length) {
+                undoStack.push(snapshot());
+                currentTokens = redoStack.pop();
+                data = tokensToData(currentTokens);
+                render();
+                if (editBox) editBox.textContent = getFullText();
+              }
+            }
           });
+
 
           function tokensToData(tokens) {
             const text = wordsToText(tokens);
