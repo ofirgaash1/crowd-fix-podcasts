@@ -4,7 +4,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Crowd Correction For Podcast</title>
+  <title>Crowd Podcast Correction Interface</title>
   <style>
     :root {
       --bg: #0b0f14;
@@ -410,23 +410,11 @@
       let undoStack = [], redoStack = [];
 
       const TOKEN_KEY = 'hfToken';
+      const getTok = () => localStorage.getItem(TOKEN_KEY) || '';
+      const setTok = t => t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY);
 
-
-      ///// HARD CODED TOKEN //////////
-
-      // BEFORE:
-
-      // const getTok = () => localStorage.getItem(TOKEN_KEY) || '';
-      // const setTok = t => t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY);
-      // AFTER:
-
-      const getTok = () => "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";
-      const setTok = () => {};
       // ====== Utils
-
-      // HARD CODED TOKEN DEBUG:
-      // const isHf = u => { try { const h = new URL(u).host; return h.endsWith('huggingface.co') || h.endsWith('hf.co') } catch { return false } };
-      const isHf = u => { { return true } };
+      const isHf = u => { try { const h = new URL(u).host; return h.endsWith('huggingface.co') || h.endsWith('hf.co') } catch { return false } };
       const encPath = p => p.split('/').map(encodeURIComponent).join('/');
       const hfRes = (path, ds) => `https://huggingface.co/datasets/ivrit-ai/${ds}/resolve/main/${encPath(path)}`;
       const opusUrl = (path) => hfRes(path, 'audio-v2-opus');
