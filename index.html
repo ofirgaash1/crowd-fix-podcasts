@@ -379,7 +379,7 @@
             <button class="pill" id="back30">⏪ 30s</button>
             <button class="pill" id="fwd30">30s ⏩</button>
             <span style="flex:1"></span>
-            <label>מהירות: <input id="rate" type="range" min="0.5" max="2" step="0.05" value="1" /></label>
+            <label>מהירות: <input id="rate" type="range" min="0.3" max="3" step="0.05" value="1" /></label>
             <span id="rateVal" class="hint">×1.00</span>
           </div>
           <div id="meta" class="hint" style="margin-top:.4rem"></div>
@@ -726,10 +726,11 @@
             Object.assign(editBox.style, {
               minHeight: '40vh',
               outline: 'none',
-              fontSize: fontSize.toFixed(2) + "rem"
+              fontSize: getComputedStyle(transcriptEl).fontSize // <-- key line
             });
 
-            tr.innerHTML = ''; tr.appendChild(editBox);
+            tr.innerHTML = '';
+            tr.appendChild(editBox);
 
             // ENTER commits (no Ctrl+Enter); ESC cancels
             editBox.addEventListener('keydown', (e) => {
