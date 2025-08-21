@@ -417,12 +417,13 @@
       // BEFORE:
 
       // const getTok = () => localStorage.getItem(TOKEN_KEY) || '';
-      
+      // const setTok = t => t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY);
       // AFTER:
       
       const getTok = () => "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";
-      const setTok = t => t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY);
+      const setTok = () => {};
 
+      
       // ====== Utils
       const isHf = u => { try { const h = new URL(u).host; return h.endsWith('huggingface.co') || h.endsWith('hf.co') } catch { return false } };
       const encPath = p => p.split('/').map(encodeURIComponent).join('/');
