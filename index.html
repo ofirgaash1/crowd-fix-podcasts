@@ -206,25 +206,28 @@
       line-height: 1
     }
 
+    #fontMinus,
+    #fontPlus {
+      font-size: 0.9rem;
+      padding: 0.5rem 0.7rem;
+      min-width: 2.2rem;
+      background-color: #4f4dd1;
+    }
+
     /* Transcript look */
     .transcript {
       white-space: pre-wrap;
       direction: rtl;
       line-height: 1.9;
-      font-size: 1.05rem;
-      /* Ensure spaces render identically in edit/non-edit */
-      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      font-size: 1.1rem;
+      font-family: "Noto Sans Hebrew", "Rubik", Arial, sans-serif;
     }
 
     .word {
-      padding: 0 .12rem;
+      padding: 0;
       border-radius: .35rem;
       transition: background-color .15s ease;
       cursor: pointer
-    }
-
-    .word:hover {
-      background: rgba(120, 182, 255, .14)
     }
 
     .word.active {
@@ -301,6 +304,28 @@
       justify-content: flex-end;
       padding: 0 1rem 1rem
     }
+
+    #scrollTopBtn {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      /* RTL: keep it on the left, but you can change to right if you prefer */
+      z-index: 100;
+      display: none;
+      background: rgba(221, 221, 221, 0.685);
+      color: #fff;
+      border: none;
+      border-radius: 50%;
+      width: 44px;
+      height: 44px;
+      font-size: 1.2rem;
+      cursor: pointer;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+    }
+
+    #scrollTopBtn:hover {
+      background: #5596e6;
+    }
   </style>
   <!-- removed diff-match-patch import -->
 </head>
@@ -312,8 +337,9 @@
         <label><input id="autoScrollChk" type="checkbox" checked /> גלילה אוטומטית</label>
         <button id="settingsBtn">⚙️</button>
         <span style="flex:1"></span>
-        <span id="kbdHelp" class="hint">⌨️ קיצורים: קליק ימני להצבת סמן · Enter לשמירה · Esc לביטול · Ctrl+Z לבטל ·
-          Ctrl+Shift+Z לחזור · Ctrl+Enter לשמירה</span>
+        <span id="kbdHelp" class="hint">⌨️ קיצורים: קליק ימני לעריכת הטקסט · · · · · · Enter לשמירה · · · · · · Esc
+          לביטול
+        </span>
         <span style="flex:1"></span>
         <button id="dlJson">⬇️ JSON</button>
         <button id="dlVtt">⬇️ VTT</button>
@@ -364,599 +390,660 @@
       <section class="card" id="transcriptCard">
         <div class="head">
           <div>תמליל</div>
+          <div>
+            <button id="fontMinus" class="pill">A−</button>
+            <button id="fontPlus" class="pill">A+</button>
+          </div>
         </div>
         <div id="transcript" class="body transcript"></div>
       </section>
-    </div>
-  </div>
 
-  <div id="modal" class="modal" aria-hidden="true">
-    <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="t">
-      <h3 id="t">Hugging Face Token</h3>
-      <div class="p">
-        <div class="row"><input id="hfToken" type="password" placeholder="hf_XXXXXXXXXXXXXXXXXX" style="width:100%">
+
+      <div id="modal" class="modal" aria-hidden="true">
+        <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="t">
+          <h3 id="t">Hugging Face Token</h3>
+          <div class="p">
+            <div class="row"><input id="hfToken" type="password" placeholder="hf_XXXXXXXXXXXXXXXXXX" style="width:100%">
+            </div>
+            <p class="hint">נשמר מקומית בלבד; נשלח רק ל-huggingface.co. קבצי אודיו נטענים כ-Blob כאשר נדרש.</p>
+          </div>
+          <div class="actions"><button id="mClear">נקה</button><button id="mClose">סגור</button><button id="mSave"
+              class="primary">שמור</button></div>
         </div>
-        <p class="hint">נשמר מקומית בלבד; נשלח רק ל-huggingface.co. קבצי אודיו נטענים כ-Blob כאשר נדרש.</p>
       </div>
-      <div class="actions"><button id="mClear">נקה</button><button id="mClose">סגור</button><button id="mSave"
-          class="primary">שמור</button></div>
-    </div>
-  </div>
+      <button id="scrollTopBtn" title="חזור למעלה">⬆️</button>
+      <script src="https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako.min.js"></script>
+      <script>
+        (() => {
+          // ====== El refs
+          const $ = (id) => document.getElementById(id);
+          const player = $('player'), tr = $('transcript'), status = $('status'), meta = $('meta'), err = $('err');
+          const autoScroll = $('autoScrollChk'), rate = $('rate'), rateVal = $('rateVal');
+          const settingsBtn = $('settingsBtn'), dlJsonBtn = $('dlJson'), dlVttBtn = $('dlVtt');
+          const modal = $('modal'), hfTokenInput = $('hfToken'); const mSave = $('mSave'), mClose = $('mClose'), mClear = $('mClear');
+          const foldersEl = $('folders'), filesEl = $('files');
+          const browserCard = $('browserCard'), toggleBrowser = $('toggleBrowser'), expandBrowser = $('expandBrowser'), panel = $('panel');
+          const transcriptEl = $('transcript');
+          const fontMinus = $('fontMinus');
+          const fontPlus = $('fontPlus');
 
-  <script src="https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako.min.js"></script>
-  <script>
-    (() => {
-      // ====== El refs
-      const $ = (id) => document.getElementById(id);
-      const player = $('player'), tr = $('transcript'), status = $('status'), meta = $('meta'), err = $('err');
-      const autoScroll = $('autoScrollChk'), rate = $('rate'), rateVal = $('rateVal');
-      const settingsBtn = $('settingsBtn'), dlJsonBtn = $('dlJson'), dlVttBtn = $('dlVtt');
-      const modal = $('modal'), hfTokenInput = $('hfToken'); const mSave = $('mSave'), mClose = $('mClose'), mClear = $('mClear');
-      const foldersEl = $('folders'), filesEl = $('files');
-      const browserCard = $('browserCard'), toggleBrowser = $('toggleBrowser'), expandBrowser = $('expandBrowser'), panel = $('panel');
+          // ====== State
+          let data = { text: '', segments: [] };
+          let wordEls = [], starts = [], ends = [], lastIdx = -1, objUrl = null;
+          let editingFull = { active: false, resume: false, original: '', caret: 0 };
+          let editBox = null; // contentEditable div
+          let currentFileNode = null;
 
-      // ====== State
-      let data = { text: '', segments: [] };
-      let wordEls = [], starts = [], ends = [], lastIdx = -1, objUrl = null;
-      let editingFull = { active: false, resume: false, original: '', caret: 0 };
-      let editBox = null; // contentEditable div
-      let currentFileNode = null;
+          // Baseline/current token streams (flattened, include \n tokens)
+          let baselineTokens = []; // immutable
+          let currentTokens = [];  // mutable, with state: 'keep'|'ins'|'del'
 
-      // Baseline/current token streams (flattened, include \n tokens)
-      let baselineTokens = []; // immutable
-      let currentTokens = [];  // mutable, with state: 'keep'|'ins'|'del'
+          // History for undo/redo (snapshots of currentTokens)
+          let undoStack = [], redoStack = [];
 
-      // History for undo/redo (snapshots of currentTokens)
-      let undoStack = [], redoStack = [];
+          const TOKEN_KEY = 'hfToken';
+          const getTok = () => localStorage.getItem(TOKEN_KEY) || '';
+          const setTok = t => t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY);
 
-      const TOKEN_KEY = 'hfToken';
-      const getTok = () => localStorage.getItem(TOKEN_KEY) || '';
-      const setTok = t => t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY);
+          // ====== Utils
+          const isHf = u => { try { const h = new URL(u).host; return h.endsWith('huggingface.co') || h.endsWith('hf.co') } catch { return false } };
+          const encPath = p => p.split('/').map(encodeURIComponent).join('/');
+          const hfRes = (path, ds) => `https://huggingface.co/datasets/ivrit-ai/${ds}/resolve/main/${encPath(path)}`;
+          const opusUrl = (path) => hfRes(path, 'audio-v2-opus');
+          const transUrl = (path) => hfRes(path, 'audio-v2-transcripts');
+          const normPaths = (folder, file) => ({ audioPath: `${folder}/${file}`, trPath: `${folder}/${file.replace(/\.opus$/i, '')}/full_transcript.json.gz` });
+          const t2 = t => { if (!Number.isFinite(t)) return '—'; const s = ('0' + Math.floor(t % 60)).slice(-2), m = ('0' + Math.floor(t / 60 % 60)).slice(-2), h = Math.floor(t / 3600); return h ? `${h}:${m}:${s}` : `${m}:${s}` };
+          const fetchAuth = (u, o = {}) => { const h = new Headers(o.headers || {}); if (!h.has('Accept')) h.set('Accept', 'application/json'); if (getTok() && isHf(u)) h.set('Authorization', 'Bearer ' + getTok()); return fetch(u, { ...o, headers: h, mode: 'cors', redirect: 'follow' }); };
+          const clearTr = () => { tr.innerHTML = ''; wordEls = []; starts = []; ends = []; lastIdx = -1 };
+          const showErr = m => { err.textContent = m || '' };
+          const deepCopy = x => JSON.parse(JSON.stringify(x));
 
-      // ====== Utils
-      const isHf = u => { try { const h = new URL(u).host; return h.endsWith('huggingface.co') || h.endsWith('hf.co') } catch { return false } };
-      const encPath = p => p.split('/').map(encodeURIComponent).join('/');
-      const hfRes = (path, ds) => `https://huggingface.co/datasets/ivrit-ai/${ds}/resolve/main/${encPath(path)}`;
-      const opusUrl = (path) => hfRes(path, 'audio-v2-opus');
-      const transUrl = (path) => hfRes(path, 'audio-v2-transcripts');
-      const normPaths = (folder, file) => ({ audioPath: `${folder}/${file}`, trPath: `${folder}/${file.replace(/\.opus$/i, '')}/full_transcript.json.gz` });
-      const t2 = t => { if (!Number.isFinite(t)) return '—'; const s = ('0' + Math.floor(t % 60)).slice(-2), m = ('0' + Math.floor(t / 60 % 60)).slice(-2), h = Math.floor(t / 3600); return h ? `${h}:${m}:${s}` : `${m}:${s}` };
-      const fetchAuth = (u, o = {}) => { const h = new Headers(o.headers || {}); if (!h.has('Accept')) h.set('Accept', 'application/json'); if (getTok() && isHf(u)) h.set('Authorization', 'Bearer ' + getTok()); return fetch(u, { ...o, headers: h, mode: 'cors', redirect: 'follow' }); };
-      const clearTr = () => { tr.innerHTML = ''; wordEls = []; starts = []; ends = []; lastIdx = -1 };
-      const showErr = m => { err.textContent = m || '' };
-      const deepCopy = x => JSON.parse(JSON.stringify(x));
-
-      function tokenize(text) {
-        const out = [];
-        let buf = "";
-        for (const ch of Array.from(text)) {
-          if (/\s/u.test(ch)) {        // whitespace char
-            if (buf) { out.push(buf); buf = ""; }
-            out.push(ch);             // ONE token per whitespace char
-          } else {                    // non-whitespace
-            buf += ch;                // accumulate run
-          }
-        }
-        if (buf) out.push(buf);
-        return out;
-      }
-
-      // Flatten data.segments -> tokens (inserting \n between segments)
-      function flattenToTokens(d) {
-        const toks = []; let lastEnd = 0;
-        d.segments.forEach((s, si) => {
-          s.words.forEach(w => { toks.push({ word: String(w.word || ''), start: +w.start || 0, end: +w.end || ((+w.start || 0) + .25), state: 'keep' }); lastEnd = toks[toks.length - 1].end; });
-          if (si < d.segments.length - 1) { toks.push({ word: '\n', start: lastEnd, end: lastEnd, state: 'keep' }); }
-        });
-        return toks;
-      }
-
-      const wordsToText = (words) => words.filter(w => w.state !== "del").map(w => w.word).join('');
-
-      // ====== Diff (lightweight LCS on token arrays)
-      function diffOps(A, B) { // arrays of strings
-        const m = A.length, n = B.length;
-        const dp = Array(m + 1).fill(null).map(() => Array(n + 1).fill(0));
-        for (let i = m - 1; i >= 0; i--) for (let j = n - 1; j >= 0; j--) dp[i][j] = (A[i] === B[j]) ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
-        let i = 0, j = 0, ops = [], cur = null; const push = t => { if (cur && cur.type === t) cur.count++; else { if (cur) ops.push(cur); cur = { type: t, count: 1 }; } };
-        while (i < m && j < n) { if (A[i] === B[j]) { push('equal'); i++; j++; } else if (dp[i + 1][j] >= dp[i][j + 1]) { push('delete'); i++; } else { push('insert'); j++; } }
-        while (i < m) { push('delete'); i++; }
-        while (j < n) { push('insert'); j++; }
-        if (cur) ops.push(cur); return ops;
-      }
-
-
-
-      // Use normalized baseline so LCS aligns unchanged tokens;
-      // unchanged words keep EXACT timestamps; only inserts get interpolated.
-      function buildFromBaseline(baselineTokens, newText) {
-        const A = normalizeBaselineForDiff(baselineTokens);   // [{word,start,end}]
-        const B = tokenize(newText);                          // [" ", "מילה", " ", ...]
-        const aWords = A.map(w => w.word);
-
-        // LCS table
-        const m = aWords.length, n = B.length;
-        const dp = Array(m + 1).fill(null).map(() => Array(n + 1).fill(0));
-        for (let i = m - 1; i >= 0; i--) {
-          for (let j = n - 1; j >= 0; j--) {
-            dp[i][j] = (aWords[i] === B[j]) ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
-          }
-        }
-
-        // Backtrack → ops
-        const out = [];
-        let i = 0, j = 0;
-        while (i < m && j < n) {
-          if (aWords[i] === B[j]) {
-            const w = A[i++];
-            out.push({ word: w.word, start: w.start, end: w.end, state: 'keep' }); // exact times preserved
-            j++;
-          } else if (dp[i + 1][j] >= dp[i][j + 1]) {
-            const w = A[i++];
-            out.push({ word: w.word, start: w.start, end: w.end, state: 'del' });
-          } else {
-            out.push({ word: B[j++], start: NaN, end: NaN, state: 'ins' });
-          }
-        }
-        while (i < m) { const w = A[i++]; out.push({ word: w.word, start: w.start, end: w.end, state: 'del' }); }
-        while (j < n) { out.push({ word: B[j++], start: NaN, end: NaN, state: 'ins' }); }
-
-        assignTimesFromAnchors(out); // only modifies 'ins'
-        return out;
-      }
-
-      // Helper: split each baseline token into whitespace/non-whitespace runs,
-      // and apportion the token’s original time across the runs so unchanged
-      // runs keep their exact/relative timestamps.
-      // Keep timestamps of unchanged WORDS EXACTLY;
-      // split baseline tokens into WS/non-WS runs BUT
-      // give WS runs zero-duration anchors so they never
-      // shift word timings.
-      function normalizeBaselineForDiff(baselineTokens) {
-        // Baseline from the model may contain leading/trailing spaces inside a single token.
-        // We split into runs, but:
-        //  - non-WS run (the "word") keeps the FULL original token start/end
-        //  - WS runs become zero-duration anchors located proportionally inside the token span
-        const out = [];
-        const isWS = (s) => /^\s+$/u.test(s);
-
-        for (const t of baselineTokens) {
-          const txt = String(t.word || '');
-          if (txt === '') { out.push({ word: '', start: t.start, end: t.end }); continue; }
-
-          const parts = txt.match(/\s+|\S+/gu) || [txt];
-          let pos = 0;
-          for (const p of parts) {
-            const from = pos;
-            const to = pos + p.length;
-            pos = to;
-
-            if (isWS(p)) {
-              // Zero-duration anchor inside the token span
-              const span = Math.max(0, (t.end || 0) - (t.start || 0));
-              const L = Math.max(1, txt.length);
-              const anchor = (t.start || 0) + span * (from / L);
-              out.push({ word: p, start: anchor, end: anchor });
-            } else {
-              // Preserve the ENTIRE original token timing for the word piece
-              out.push({ word: p, start: t.start, end: t.end });
-            }
-          }
-        }
-        return out;
-      }
-
-      function assignTimesFromAnchors(arr) {
-        const isWS = (s) => /^\s$/u.test(s); // single whitespace char because of tokenize()
-
-        const isWordKeep = (w) =>
-          w.state === 'keep' && !isWS(w.word) &&
-          Number.isFinite(w.start) && Number.isFinite(w.end) && w.end > w.start;
-
-        const isAnyKeep = (w) =>
-          w.state === 'keep' &&
-          Number.isFinite(w.start) && Number.isFinite(w.end);
-
-        function leftAnchor(i) {
-          for (let k = i - 1; k >= 0; k--) {
-            if (arr[k].state === 'keep' && arr[k].word === '\n') return null; // barrier
-            if (isWordKeep(arr[k])) return arr[k];
-          }
-          for (let k = i - 1; k >= 0; k--) {
-            if (arr[k].state === 'keep' && arr[k].word === '\n') return null; // barrier
-            if (isAnyKeep(arr[k])) return arr[k];
-          }
-          return null;
-        }
-
-        function rightAnchor(i) {
-          for (let k = i + 1; k < arr.length; k++) {
-            if (arr[k].state === 'keep' && arr[k].word === '\n') return null; // barrier
-            if (isWordKeep(arr[k])) return arr[k];
-          }
-          for (let k = i + 1; k < arr.length; k++) {
-            if (arr[k].state === 'keep' && arr[k].word === '\n') return null; // barrier
-            if (isAnyKeep(arr[k])) return arr[k];
-          }
-          return null;
-        }
-
-        let i = 0;
-        while (i < arr.length) {
-          if (arr[i].state !== 'ins') { i++; continue; }
-
-          // gather inserted run [i, j)
-          let j = i; while (j < arr.length && arr[j].state === 'ins') j++;
-
-          const L = leftAnchor(i), R = rightAnchor(j - 1);
-          const slice = arr.slice(i, j);
-
-          // Count only non-WS for spacing
-          const wordIdxs = slice.map((t, ix) => (!isWS(t.word) ? ix : -1)).filter(ix => ix >= 0);
-          const wordCount = wordIdxs.length;
-
-          // Compute window
-          let winStart, winEnd;
-          if (L && R && R.start > L.end) {
-            winStart = L.end; winEnd = R.start;
-          } else if (L) {
-            winStart = L.end; winEnd = L.end + Math.max(0.12 * Math.max(1, wordCount), 0.12);
-          } else if (R) {
-            winEnd = R.start; winStart = R.start - Math.max(0.12 * Math.max(1, wordCount), 0.12);
-          } else {
-            winStart = 0; winEnd = 0.12 * Math.max(1, wordCount);
-          }
-          if (winEnd <= winStart) winEnd = winStart + Math.max(0.12 * Math.max(1, wordCount), 0.12);
-          // Assign times:
-          if (wordCount > 0) {
-            const step = (winEnd - winStart) / (wordCount + 1);
-            let nthWord = 0;
-            for (let k = 0; k < slice.length; k++) {
-              const g = arr[i + k];
-              if (isWS(g.word)) {
-                // zero-duration anchor along the window
-                const frac = (k + 1) / (slice.length + 1);
-                const anchor = winStart + (winEnd - winStart) * frac;
-                g.start = g.end = anchor;
-              } else {
-                nthWord++;
-                const s = winStart + step * nthWord;
-                g.start = Math.max(0, s - step * 0.45);
-                g.end = g.start + Math.max(0.02, step * 0.9);
+          function tokenize(text) {
+            const out = [];
+            let buf = "";
+            for (const ch of Array.from(text)) {
+              if (/\s/u.test(ch)) {        // whitespace char
+                if (buf) { out.push(buf); buf = ""; }
+                out.push(ch);             // ONE token per whitespace char
+              } else {                    // non-whitespace
+                buf += ch;                // accumulate run
               }
             }
-          } else {
-            // only whitespace inserted → anchor all at window mid (zero-duration)
-            const mid = winStart + (winEnd - winStart) / 2;
-            for (let k = 0; k < slice.length; k++) {
-              const g = arr[i + k];
-              g.start = g.end = mid;
+            if (buf) out.push(buf);
+            return out;
+          }
+
+          // Flatten data.segments -> tokens (inserting \n between segments)
+          function flattenToTokens(d) {
+            const toks = []; let lastEnd = 0;
+            d.segments.forEach((s, si) => {
+              s.words.forEach(w => { toks.push({ word: String(w.word || ''), start: +w.start || 0, end: +w.end || ((+w.start || 0) + .25), state: 'keep' }); lastEnd = toks[toks.length - 1].end; });
+              if (si < d.segments.length - 1) { toks.push({ word: '\n', start: lastEnd, end: lastEnd, state: 'keep' }); }
+            });
+            return toks;
+          }
+
+          const wordsToText = (words) => words.filter(w => w.state !== "del").map(w => w.word).join('');
+
+          // ====== Diff (lightweight LCS on token arrays)
+          function diffOps(A, B) { // arrays of strings
+            const m = A.length, n = B.length;
+            const dp = Array(m + 1).fill(null).map(() => Array(n + 1).fill(0));
+            for (let i = m - 1; i >= 0; i--) for (let j = n - 1; j >= 0; j--) dp[i][j] = (A[i] === B[j]) ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+            let i = 0, j = 0, ops = [], cur = null; const push = t => { if (cur && cur.type === t) cur.count++; else { if (cur) ops.push(cur); cur = { type: t, count: 1 }; } };
+            while (i < m && j < n) { if (A[i] === B[j]) { push('equal'); i++; j++; } else if (dp[i + 1][j] >= dp[i][j + 1]) { push('delete'); i++; } else { push('insert'); j++; } }
+            while (i < m) { push('delete'); i++; }
+            while (j < n) { push('insert'); j++; }
+            if (cur) ops.push(cur); return ops;
+          }
+
+
+
+          // Use normalized baseline so LCS aligns unchanged tokens;
+          // unchanged words keep EXACT timestamps; only inserts get interpolated.
+          function buildFromBaseline(baselineTokens, newText) {
+            const A = normalizeBaselineForDiff(baselineTokens);   // [{word,start,end}]
+            const B = tokenize(newText);                          // [" ", "מילה", " ", ...]
+            const aWords = A.map(w => w.word);
+
+            // LCS table
+            const m = aWords.length, n = B.length;
+            const dp = Array(m + 1).fill(null).map(() => Array(n + 1).fill(0));
+            for (let i = m - 1; i >= 0; i--) {
+              for (let j = n - 1; j >= 0; j--) {
+                dp[i][j] = (aWords[i] === B[j]) ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+              }
+            }
+
+            // Backtrack → ops
+            const out = [];
+            let i = 0, j = 0;
+            while (i < m && j < n) {
+              if (aWords[i] === B[j]) {
+                const w = A[i++];
+                out.push({ word: w.word, start: w.start, end: w.end, state: 'keep' }); // exact times preserved
+                j++;
+              } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+                const w = A[i++];
+                out.push({ word: w.word, start: w.start, end: w.end, state: 'del' });
+              } else {
+                out.push({ word: B[j++], start: NaN, end: NaN, state: 'ins' });
+              }
+            }
+            while (i < m) { const w = A[i++]; out.push({ word: w.word, start: w.start, end: w.end, state: 'del' }); }
+            while (j < n) { out.push({ word: B[j++], start: NaN, end: NaN, state: 'ins' }); }
+
+            assignTimesFromAnchors(out); // only modifies 'ins'
+            return out;
+          }
+
+          // Helper: split each baseline token into whitespace/non-whitespace runs,
+          // and apportion the token’s original time across the runs so unchanged
+          // runs keep their exact/relative timestamps.
+          // Keep timestamps of unchanged WORDS EXACTLY;
+          // split baseline tokens into WS/non-WS runs BUT
+          // give WS runs zero-duration anchors so they never
+          // shift word timings.
+          function normalizeBaselineForDiff(baselineTokens) {
+            // Baseline from the model may contain leading/trailing spaces inside a single token.
+            // We split into runs, but:
+            //  - non-WS run (the "word") keeps the FULL original token start/end
+            //  - WS runs become zero-duration anchors located proportionally inside the token span
+            const out = [];
+            const isWS = (s) => /^\s+$/u.test(s);
+
+            for (const t of baselineTokens) {
+              const txt = String(t.word || '');
+              if (txt === '') { out.push({ word: '', start: t.start, end: t.end }); continue; }
+
+              const parts = txt.match(/\s+|\S+/gu) || [txt];
+              let pos = 0;
+              for (const p of parts) {
+                const from = pos;
+                const to = pos + p.length;
+                pos = to;
+
+                if (isWS(p)) {
+                  // Zero-duration anchor inside the token span
+                  const span = Math.max(0, (t.end || 0) - (t.start || 0));
+                  const L = Math.max(1, txt.length);
+                  const anchor = (t.start || 0) + span * (from / L);
+                  out.push({ word: p, start: anchor, end: anchor });
+                } else {
+                  // Preserve the ENTIRE original token timing for the word piece
+                  out.push({ word: p, start: t.start, end: t.end });
+                }
+              }
+            }
+            return out;
+          }
+
+          function assignTimesFromAnchors(arr) {
+            const isWS = (s) => /^\s$/u.test(s); // single whitespace char because of tokenize()
+
+            const isWordKeep = (w) =>
+              w.state === 'keep' && !isWS(w.word) &&
+              Number.isFinite(w.start) && Number.isFinite(w.end) && w.end > w.start;
+
+            const isAnyKeep = (w) =>
+              w.state === 'keep' &&
+              Number.isFinite(w.start) && Number.isFinite(w.end);
+
+            function leftAnchor(i) {
+              for (let k = i - 1; k >= 0; k--) {
+                if (arr[k].state === 'keep' && arr[k].word === '\n') return null; // barrier
+                if (isWordKeep(arr[k])) return arr[k];
+              }
+              for (let k = i - 1; k >= 0; k--) {
+                if (arr[k].state === 'keep' && arr[k].word === '\n') return null; // barrier
+                if (isAnyKeep(arr[k])) return arr[k];
+              }
+              return null;
+            }
+
+            function rightAnchor(i) {
+              for (let k = i + 1; k < arr.length; k++) {
+                if (arr[k].state === 'keep' && arr[k].word === '\n') return null; // barrier
+                if (isWordKeep(arr[k])) return arr[k];
+              }
+              for (let k = i + 1; k < arr.length; k++) {
+                if (arr[k].state === 'keep' && arr[k].word === '\n') return null; // barrier
+                if (isAnyKeep(arr[k])) return arr[k];
+              }
+              return null;
+            }
+
+            let i = 0;
+            while (i < arr.length) {
+              if (arr[i].state !== 'ins') { i++; continue; }
+
+              // gather inserted run [i, j)
+              let j = i; while (j < arr.length && arr[j].state === 'ins') j++;
+
+              const L = leftAnchor(i), R = rightAnchor(j - 1);
+              const slice = arr.slice(i, j);
+
+              // Count only non-WS for spacing
+              const wordIdxs = slice.map((t, ix) => (!isWS(t.word) ? ix : -1)).filter(ix => ix >= 0);
+              const wordCount = wordIdxs.length;
+
+              // Compute window
+              let winStart, winEnd;
+              if (L && R && R.start > L.end) {
+                winStart = L.end; winEnd = R.start;
+              } else if (L) {
+                winStart = L.end; winEnd = L.end + Math.max(0.12 * Math.max(1, wordCount), 0.12);
+              } else if (R) {
+                winEnd = R.start; winStart = R.start - Math.max(0.12 * Math.max(1, wordCount), 0.12);
+              } else {
+                winStart = 0; winEnd = 0.12 * Math.max(1, wordCount);
+              }
+              if (winEnd <= winStart) winEnd = winStart + Math.max(0.12 * Math.max(1, wordCount), 0.12);
+              // Assign times:
+              if (wordCount > 0) {
+                const step = (winEnd - winStart) / (wordCount + 1);
+                let nthWord = 0;
+                for (let k = 0; k < slice.length; k++) {
+                  const g = arr[i + k];
+                  if (isWS(g.word)) {
+                    // zero-duration anchor along the window
+                    const frac = (k + 1) / (slice.length + 1);
+                    const anchor = winStart + (winEnd - winStart) * frac;
+                    g.start = g.end = anchor;
+                  } else {
+                    nthWord++;
+                    const s = winStart + step * nthWord;
+                    g.start = Math.max(0, s - step * 0.45);
+                    g.end = g.start + Math.max(0.02, step * 0.9);
+                  }
+                }
+              } else {
+                // only whitespace inserted → anchor all at window mid (zero-duration)
+                const mid = winStart + (winEnd - winStart) / 2;
+                for (let k = 0; k < slice.length; k++) {
+                  const g = arr[i + k];
+                  g.start = g.end = mid;
+                }
+              }
+
+              i = j;
             }
           }
 
-          i = j;
-        }
-      }
 
-
-      // ====== Render
-      function render() {
-        if (editingFull.active) return;
-        clearTr();
-        const f = document.createDocumentFragment();
-        currentTokens.forEach((w, ti) => {
-          if (w.word === '\n') { f.appendChild(document.createTextNode('\n')); return; }
-          const sp = document.createElement('span'); sp.className = 'word'; sp.textContent = w.word; sp.dataset.start = w.start; sp.dataset.end = w.end; sp.dataset.ti = ti;
-          if (w.state === 'ins') sp.classList.add('added-lite');
-          if (w.state === 'del') sp.classList.add('deleted');
-          f.appendChild(sp);
-          if (w.state !== 'del') { wordEls.push(sp); starts.push(w.start); ends.push(w.end); }
-        });
-        tr.appendChild(f);
-      }
-
-      // ====== Word interactions (Event Delegation)
-      tr.onclick = e => {
-        const el = e.target.closest('.word');
-        if (el && !el.classList.contains('deleted')) {
-          const t = +el.dataset.start; if (!editingFull.active) { player.currentTime = t + .01; player.play(); }
-        }
-      };
-
-      // Precise caret placement via right-click
-      tr.oncontextmenu = e => {
-        e.preventDefault();
-        const el = e.target.closest('.word'); if (!el) return;
-        const ti = +el.dataset.ti;
-        let charOffsetInWord = el.textContent.length; // default: end
-        try {
-          if (document.caretPositionFromPoint) { const pos = document.caretPositionFromPoint(e.clientX, e.clientY); if (pos && el.contains(pos.offsetNode)) charOffsetInWord = pos.offset; }
-          else if (document.caretRangeFromPoint) { const r = document.caretRangeFromPoint(e.clientX, e.clientY); if (r && el.contains(r.startContainer)) charOffsetInWord = r.startOffset; }
-        } catch { }
-        startFullEditAtTokenIndex(ti, charOffsetInWord);
-      };
-
-      // ====== Full-text edit mode
-      function getFullText() { return wordsToText(currentTokens); }
-
-      function getAbsIndexBeforeToken(ti) { // counts only non-deleted tokens, includes newlines
-        let off = 0; for (let i = 0; i < ti; i++) { if (currentTokens[i].state !== 'del') off += (currentTokens[i].word || '').length; } return off;
-      }
-
-      function ensureEditUI() {
-        if (editBox) return;
-
-        editBox = document.createElement('div');
-        editBox.id = 'editBox';
-        editBox.contentEditable = 'true';
-        editBox.spellcheck = false;
-        editBox.className = 'transcript';
-        Object.assign(editBox.style, { minHeight: '40vh', outline: 'none' });
-
-        tr.innerHTML = ''; tr.appendChild(editBox);
-
-        // ENTER commits (no Ctrl+Enter); ESC cancels
-        editBox.addEventListener('keydown', (e) => {
-          if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault(); commitFullEdit();
-          } else if (e.key === 'Escape') {
-            e.preventDefault(); cancelFullEdit();
+          // ====== Render
+          function render() {
+            if (editingFull.active) return;
+            clearTr();
+            const f = document.createDocumentFragment();
+            currentTokens.forEach((w, ti) => {
+              if (w.word === '\n') { f.appendChild(document.createTextNode('\n')); return; }
+              const sp = document.createElement('span'); sp.className = 'word'; sp.textContent = w.word; sp.dataset.start = w.start; sp.dataset.end = w.end; sp.dataset.ti = ti;
+              if (w.state === 'ins') sp.classList.add('added-lite');
+              if (w.state === 'del') sp.classList.add('deleted');
+              f.appendChild(sp);
+              if (w.state !== 'del') { wordEls.push(sp); starts.push(w.start); ends.push(w.end); }
+            });
+            tr.appendChild(f);
           }
-        });
 
-        // One-time global: left-click outside transcript commits and resumes
-        if (!ensureEditUI._outsideBound) {
-          document.addEventListener('mousedown', (e) => {
-            if (e.button !== 0) return;
-            if (editingFull.active && editBox && !tr.contains(e.target)) {
-              e.preventDefault();
-              commitFullEdit();
+          // ====== Word interactions (Event Delegation)
+          tr.onclick = e => {
+            const el = e.target.closest('.word');
+            if (el && !el.classList.contains('deleted')) {
+              const t = +el.dataset.start; if (!editingFull.active) { player.currentTime = t + .01; player.play(); }
             }
-          }, true);
-          ensureEditUI._outsideBound = true;
-        }
-      }
+          };
 
+          // Precise caret placement via right-click
+          tr.oncontextmenu = e => {
+            e.preventDefault();
+            const el = e.target.closest('.word'); if (!el) return;
+            const ti = +el.dataset.ti;
+            let charOffsetInWord = el.textContent.length; // default: end
+            try {
+              if (document.caretPositionFromPoint) { const pos = document.caretPositionFromPoint(e.clientX, e.clientY); if (pos && el.contains(pos.offsetNode)) charOffsetInWord = pos.offset; }
+              else if (document.caretRangeFromPoint) { const r = document.caretRangeFromPoint(e.clientX, e.clientY); if (r && el.contains(r.startContainer)) charOffsetInWord = r.startOffset; }
+            } catch { }
+            startFullEditAtTokenIndex(ti, charOffsetInWord);
+          };
 
+          // ====== Full-text edit mode
+          function getFullText() { return wordsToText(currentTokens); }
 
-
-      function placeCaret(container, index) {
-        const range = document.createRange(); const sel = window.getSelection();
-        // normalize to single text node for reliable offsets
-        container.textContent = container.textContent;
-        const textNode = container.firstChild || container;
-        const len = (textNode.textContent || '').length;
-        range.setStart(textNode, Math.max(0, Math.min(len, index)));
-        range.collapse(true); sel.removeAllRanges(); sel.addRange(range); container.focus();
-      }
-
-      function startFullEditAtTokenIndex(ti, charOffsetInWord) {
-        const resume = !player.paused && !player.ended; try { player.pause() } catch { }
-        ensureEditUI();
-        const fullText = getFullText();
-        editingFull.active = true; editingFull.resume = resume; editingFull.original = fullText;
-        editBox.textContent = fullText;
-        const caretPos = getAbsIndexBeforeToken(ti) + Math.min(charOffsetInWord, (currentTokens[ti].word || '').length);
-        requestAnimationFrame(() => placeCaret(editBox, caretPos));
-      }
-
-      function snapshot() { return deepCopy(currentTokens); }
-
-
-      function commitFullEdit() {
-        if (!editingFull.active) return;
-        const resume = !!editingFull.resume;
-
-        const newText = (editBox && (editBox.innerText || '')).replace(/\r/g, '');
-        // >>> Early exit if nothing changed (prevents any re-tokenize/diff)
-        if (newText === (editingFull.original || '')) {
-          editingFull = { active: false, resume: false, original: '', caret: 0 };
-          editBox = null;
-          render();
-          if (resume && !player.ended) { try { player.play(); } catch { } }
-          return;
-        }
-
-        // ... your existing pipeline that calls buildFromBaseline(...) ...
-        currentTokens = buildFromBaseline(baselineTokens, newText); // or your equivalent
-        data = tokensToData(currentTokens);
-
-        editingFull = { active: false, resume: false, original: '', caret: 0 };
-        editBox = null;
-        render();
-        if (resume && !player.ended) { try { player.play(); } catch { } }
-      }
-
-      function cancelFullEdit() {
-        if (!editingFull.active) return; const resume = editingFull.resume;
-        editingFull = { active: false, resume: false, original: '', caret: 0 }; editBox = null; render();
-        if (resume && !player.ended) try { player.play() } catch { };
-      }
-
-      // Global Undo/Redo
-      document.addEventListener('keydown', (e) => {
-        const isZ = (e.key === 'z' || e.key === 'Z');
-        if (e.ctrlKey && isZ && !e.shiftKey) { e.preventDefault(); if (undoStack.length) { redoStack.push(snapshot()); currentTokens = undoStack.pop(); data = tokensToData(currentTokens); render(); if (editBox) editBox.textContent = getFullText(); } }
-        else if (e.ctrlKey && e.shiftKey && isZ) { e.preventDefault(); if (redoStack.length) { undoStack.push(snapshot()); currentTokens = redoStack.pop(); data = tokensToData(currentTokens); render(); if (editBox) editBox.textContent = getFullText(); } }
-      });
-
-      function tokensToData(tokens) {
-        const text = wordsToText(tokens);
-        const segs = [];
-        let words = [];
-        let pendingWS = '';
-        let pendingS = Infinity;
-        for (const t of tokens) {
-          if (t.state === 'del') continue;
-          if (t.word === '\n') {
-            // ignore trailing pendingWS
-            segs.push(words);
-            words = [];
-            pendingWS = '';
-            pendingS = Infinity;
-            continue;
+          function getAbsIndexBeforeToken(ti) { // counts only non-deleted tokens, includes newlines
+            let off = 0; for (let i = 0; i < ti; i++) { if (currentTokens[i].state !== 'del') off += (currentTokens[i].word || '').length; } return off;
           }
-          const is_ws = /^\s$/u.test(t.word);
-          if (is_ws) {
-            pendingWS += t.word;
-            if (Number.isFinite(t.start)) pendingS = Math.min(pendingS, t.start);
-          } else {
-            const start = Number.isFinite(pendingS) ? Math.min(pendingS, t.start) : t.start;
-            words.push({ word: pendingWS + t.word, start, end: t.end });
-            pendingWS = '';
-            pendingS = Infinity;
+
+          function ensureEditUI() {
+            if (editBox) return;
+
+            editBox = document.createElement('div');
+            editBox.id = 'editBox';
+            editBox.contentEditable = 'true';
+            editBox.spellcheck = false;
+            editBox.className = 'transcript';
+            Object.assign(editBox.style, {
+              minHeight: '40vh',
+              outline: 'none',
+              fontSize: fontSize.toFixed(2) + "rem"
+            });
+
+            tr.innerHTML = ''; tr.appendChild(editBox);
+
+            // ENTER commits (no Ctrl+Enter); ESC cancels
+            editBox.addEventListener('keydown', (e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault(); commitFullEdit();
+              } else if (e.key === 'Escape') {
+                e.preventDefault(); cancelFullEdit();
+              }
+            });
+
+            // One-time global: left-click outside transcript commits and resumes
+            if (!ensureEditUI._outsideBound) {
+              document.addEventListener('mousedown', (e) => {
+                if (e.button !== 0) return;
+                if (editingFull.active && editBox && !tr.contains(e.target)) {
+                  e.preventDefault();
+                  commitFullEdit();
+                }
+              }, true);
+              ensureEditUI._outsideBound = true;
+            }
           }
-        }
-        if (words.length) segs.push(words);
-        return {
-          text, segments: segs.map(ws => {
-            const startsArr = ws.filter(w => Number.isFinite(w.start)).map(w => w.start);
-            const endsArr = ws.filter(w => Number.isFinite(w.end)).map(w => w.end);
-            const t0 = startsArr.length > 0 ? Math.min(...startsArr) : 0;
-            const t1 = endsArr.length > 0 ? Math.max(...endsArr) : 0.25;
-            return { start: t0, end: t1, text: ws.map(w => w.word).join(''), words };
-          })
-        };
-      }
 
-      // ====== Browser (folders/files)
-      function extractItems(json) { if (Array.isArray(json)) return json; if (json && Array.isArray(json.items)) return json.items; if (json && Array.isArray(json.tree)) return json.tree; if (json && Array.isArray(json.siblings)) return json.siblings; return []; }
-      function filterImmediate(items, base) { const depth = base ? base.split('/').filter(Boolean).length : 0; return items.filter(x => { const p = x.path || x.rpath || ''; if (base && !p.startsWith(base + '/')) return false; const d = p.split('/').filter(Boolean).length; return d === depth + 1; }); }
-      async function listTree(path = '') {
-        const base = 'https://huggingface.co/api/datasets/ivrit-ai/audio-v2-opus/tree/main';
-        const urls = path ? [`${base}/${encPath(path)}`, `${base}?path=${encodeURIComponent(path)}`] : [base, `${base}?recursive=false`];
-        let lastErr = null; for (const url of urls) { try { const r = await fetchAuth(url, { headers: { Accept: 'application/json' } }); if (r.status === 401 && !getTok()) throw new Error('401: דרוש hf_ token לדפדוף'); if (!r.ok) { lastErr = new Error('שגיאת רשת (' + r.status + ') בדפדוף'); continue; } const j = await r.json(); return filterImmediate(extractItems(j), path || ''); } catch (e) { lastErr = e; } } throw lastErr || new Error('שגיאה בדפדוף');
-      }
-      async function loadFolders() { foldersEl.innerHTML = '<div class="hint">טוען תיקיות…</div>'; try { const items = await listTree(''); const dirs = items.filter(x => (x.type === 'directory' || x.type === 'tree' || x.type === 'dir')).map(x => x.path.split('/').pop()).sort((a, b) => a.localeCompare(b, 'he')); foldersEl.innerHTML = dirs.map(d => `<button class=\"item\" data-folder=\"${d}\">${d}</button>`).join(''); } catch (e) { foldersEl.innerHTML = `<div class="err">${e.message || e}</div>`; } }
-      foldersEl.onclick = e => { const item = e.target.closest('.item[data-folder]'); if (item) selectFolder(item.dataset.folder, item); };
-      async function selectFolder(folder, node) { [...foldersEl.children].forEach(el => el.classList.toggle('active', el === node)); filesEl.innerHTML = '<div class="hint">טוען קבצים…</div>'; try { const items = await listTree(folder); const files = items.filter(x => { const t = (x.type || '').toLowerCase(), p = x.path || ''; return t === 'file' || t === 'blob' || t === 'lfs' || p.toLowerCase().endsWith('.opus'); }).map(x => (x.path || '').split('/').pop()).sort((a, b) => a.localeCompare(b, 'he')); filesEl.innerHTML = files.length ? files.map(f => `<button class=\"item\" data-folder=\"${folder}\" data-file=\"${f}\">${f}</button>`).join('') : '<div class="hint">אין קבצי OPUS בתיקייה זו</div>'; } catch (e) { filesEl.innerHTML = `<div class="err">${e.message || e}</div>`; } }
-      filesEl.onclick = e => { const item = e.target.closest('.item[data-file]'); if (item) selectEpisode(item.dataset.folder, item.dataset.file, item); };
-      function selectEpisode(folder, file, node) { if (node) { if (currentFileNode) currentFileNode.classList.remove('active'); currentFileNode = node; currentFileNode.classList.add('active'); } const { audioPath, trPath } = normPaths(folder, file); load(audioPath, trPath); }
 
-      // ====== Load (audio + transcript)
-      async function load(audioPath, trPath) {
-        if (currentFileNode) currentFileNode.classList.add('loading');
-        try {
-          showErr(''); clearTr(); status.textContent = 'טוען…'; undoStack = []; redoStack = [];
-          // Transcript
-          const trUrl = transUrl(trPath); let r = await fetchAuth(trUrl);
-          if (r.status === 401 && !getTok()) throw new Error('401: דרוש hf_ token לתמליל');
-          if (!r.ok) throw new Error('שגיאת רשת (' + r.status + ') בתמליל');
-          let txt, ct = (r.headers.get('content-type') || '').toLowerCase();
-          if (ct.includes('application/gzip') || trPath.endsWith('.gz')) {
-            const ab = await r.arrayBuffer(); txt = new TextDecoder('utf-8').decode(pako.ungzip(new Uint8Array(ab)));
-          } else { txt = await r.text(); }
-          const raw = JSON.parse(txt);
-          data = normData(raw);
-          baselineTokens = flattenToTokens(data);
-          currentTokens = baselineTokens.map(t => ({ word: t.word, start: t.start, end: t.end, state: 'keep' }));
-          data = tokensToData(currentTokens);
-          render();
 
-          // Audio
-          const aUrl = opusUrl(audioPath);
-          if (getTok() && isHf(aUrl)) {
-            const ar = await fetchAuth(aUrl); if (ar.status === 401) throw new Error('401: דרוש hf_ token לאודיו'); if (!ar.ok) throw new Error('שגיאה (' + ar.status + ') באודיו');
-            const b = await ar.blob(); if (objUrl) URL.revokeObjectURL(objUrl); objUrl = URL.createObjectURL(b); player.src = objUrl;
-          } else { player.src = aUrl; }
-          player.playbackRate = parseFloat(rate.value) || 1;
-          const nice = (() => { try { return decodeURIComponent(new URL(aUrl).pathname.split('/').pop()) } catch { return aUrl } })();
-          meta.innerHTML = `קובץ: <b>${nice}</b> · <a href="${aUrl}" target="_blank" rel="noopener">קישור</a>`;
-          status.textContent = 'מוכן'; player.currentTime = .01;
-        } catch (e) { status.textContent = 'שגיאה'; showErr(e.message || e); alert(e.message || e); }
-        finally { if (currentFileNode) currentFileNode.classList.remove('loading'); }
-      }
 
-      // ====== Normalization helper (unchanged core)
-      const normData = raw => { const d = JSON.parse(JSON.stringify(raw || {})); d.text = d.text || ''; d.segments = Array.isArray(d.segments) ? d.segments : []; d.segments.forEach(s => { if (!Array.isArray(s.words) || !s.words.length) { s.words = [{ word: s.text || ' ', start: +s.start || 0, end: +s.end || (+s.start || 0) + .5 }] } else s.words.forEach(w => { w.start = +w.start || 0; w.end = +w.end || w.start + .25; w.word = String(w.word || '') }) }); return d };
-
-      // ====== Exports (use currentTokens, preserve whitespace, ignore deleted tokens)
-      const vttTime = t => { const h = ('0' + Math.floor(t / 3600)).slice(-2), m = ('0' + Math.floor(t % 3600 / 60)).slice(-2), s = ('0' + Math.floor(t % 60)).slice(-2), ms = ('00' + Math.floor((t % 1) * 1000)).slice(-3); return `${h}:${m}:${s}.${ms}` };
-      const buildVtt = () => {
-        let out = 'WEBVTT\n\n';
-        let cueWords = [], cueStart = null, cueEnd = null, cueIndex = 1;
-        function flush() { if (!cueWords.length) return; out += `${cueIndex++}\n${vttTime(cueStart)} --> ${vttTime(cueEnd)}\n${cueWords.join('')}\n\n`; cueWords = []; cueStart = null; cueEnd = null; }
-        currentTokens.forEach(t => {
-          if (t.state === 'del') return; // skip deleted
-          if (t.word === '\n') { flush(); return; }
-          cueWords.push(t.word);
-          if (Number.isFinite(t.start)) cueStart = (cueStart == null) ? t.start : Math.min(cueStart, t.start);
-          if (Number.isFinite(t.end)) cueEnd = (cueEnd == null) ? t.end : Math.max(cueEnd, t.end);
-        });
-        flush();
-        return out;
-      };
-
-      const buildJson = () => {
-        const segs = [];
-        let words = [];
-        let pendingWS = '';
-        let pendingS = Infinity;
-        for (const t of currentTokens) {
-          if (t.state === 'del') continue;
-          if (t.word === '\n') {
-            // ignore trailing pendingWS
-            segs.push(words);
-            words = [];
-            pendingWS = '';
-            pendingS = Infinity;
-            continue;
+          function placeCaret(container, index) {
+            const range = document.createRange(); const sel = window.getSelection();
+            // normalize to single text node for reliable offsets
+            container.textContent = container.textContent;
+            const textNode = container.firstChild || container;
+            const len = (textNode.textContent || '').length;
+            range.setStart(textNode, Math.max(0, Math.min(len, index)));
+            range.collapse(true); sel.removeAllRanges(); sel.addRange(range); container.focus();
           }
-          const is_ws = /^\s$/u.test(t.word);
-          if (is_ws) {
-            pendingWS += t.word;
-            if (Number.isFinite(t.start)) pendingS = Math.min(pendingS, t.start);
-          } else {
-            const start = Number.isFinite(pendingS) ? Math.min(pendingS, t.start) : t.start;
-            words.push({ word: pendingWS + t.word, start, end: t.end });
-            pendingWS = '';
-            pendingS = Infinity;
+
+          function startFullEditAtTokenIndex(ti, charOffsetInWord) {
+            const resume = !player.paused && !player.ended; try { player.pause() } catch { }
+            ensureEditUI();
+            const fullText = getFullText();
+            editingFull.active = true; editingFull.resume = resume; editingFull.original = fullText;
+            editBox.textContent = fullText;
+            const caretPos = getAbsIndexBeforeToken(ti) + Math.min(charOffsetInWord, (currentTokens[ti].word || '').length);
+            requestAnimationFrame(() => placeCaret(editBox, caretPos));
           }
-        }
-        if (words.length) segs.push(words);
-        const text = segs.map(ws => ws.map(w => w.word).join('')).join('\n');
-        const out = {
-          text,
-          segments: segs.map(ws => {
-            const startsArr = ws.filter(w => Number.isFinite(w.start)).map(w => w.start);
-            const endsArr = ws.filter(w => Number.isFinite(w.end)).map(w => w.end);
-            const t0 = startsArr.length > 0 ? Math.min(...startsArr) : 0;
-            const t1 = endsArr.length > 0 ? Math.max(...endsArr) : 0.25;
-            return { start: t0, end: t1, text: ws.map(w => w.word).join(''), words: ws };
-          })
-        };
-        return JSON.stringify(out, null, 2);
-      };
 
-      const dl = (name, blob, type) => { const a = document.createElement('a'); const url = URL.createObjectURL(new Blob([blob], { type })); a.href = url; a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000) };
+          function snapshot() { return deepCopy(currentTokens); }
 
-      // ====== Playback UI
-      const idxAt = t => { let lo = 0, hi = starts.length - 1, ans = -1; while (lo <= hi) { const m = (lo + hi) >> 1; if (starts[m] <= t) { ans = m; lo = m + 1 } else hi = m - 1 } if (ans >= 0 && t > (ends[ans] || starts[ans] + .25) && ans + 1 < starts.length && starts[ans + 1] <= t) ans++; return ans };
-      const tick = () => { const t = player.currentTime, i = idxAt(t); if (i !== lastIdx) { if (lastIdx >= 0 && wordEls[lastIdx]) wordEls[lastIdx].classList.remove('active'); if (i >= 0 && wordEls[i]) { const el = wordEls[i]; el.classList.add('active'); if (autoScroll.checked) { const b = el.getBoundingClientRect(), c = tr.getBoundingClientRect(); if (b.top < c.top + 40 || b.bottom > c.bottom - 40) el.scrollIntoView({ behavior: 'smooth', block: 'center' }) } } lastIdx = i } status.textContent = `${t2(t)} / ${t2(player.duration || 0)}` };
-      player.addEventListener('timeupdate', tick);
-      player.addEventListener('ratechange', () => { rate.value = String(player.playbackRate); rateVal.textContent = '×' + player.playbackRate.toFixed(2) });
-      rate.oninput = () => { player.playbackRate = parseFloat(rate.value) || 1; rateVal.textContent = '×' + player.playbackRate.toFixed(2) };
-      const by = s => () => player.currentTime = Math.max(0, Math.min(player.duration || 0, player.currentTime + s));
-      $('back5').onclick = by(-5); $('fwd5').onclick = by(+5); $('back30').onclick = by(-30); $('fwd30').onclick = by(+30);
 
-      // ====== Settings modal
-      const openM = () => { modal.classList.add('open'); hfTokenInput.value = getTok(); };
-      const closeM = () => { modal.classList.remove('open'); };
-      settingsBtn.onclick = openM; mClose.onclick = closeM; mSave.onclick = () => { setTok(hfTokenInput.value.trim()); closeM() }; mClear.onclick = () => { setTok(''); hfTokenInput.value = '' }; modal.addEventListener('click', e => { if (e.target === modal) closeM() });
+          function commitFullEdit() {
+            if (!editingFull.active) return;
+            const resume = !!editingFull.resume;
 
-      // ====== Browser collapse toggle
-      function setCollapsed(on) { browserCard.classList.toggle('collapsed', on); panel.classList.toggle('browser-collapsed', on); toggleBrowser.textContent = on ? 'הרחב' : 'מזער'; expandBrowser.classList.toggle('hidden', !on); }
-      toggleBrowser.onclick = () => setCollapsed(!browserCard.classList.contains('collapsed'));
-      expandBrowser.onclick = () => setCollapsed(false);
+            const newText = (editBox && (editBox.innerText || '')).replace(/\r/g, '');
+            // >>> Early exit if nothing changed (prevents any re-tokenize/diff)
+            if (newText === (editingFull.original || '')) {
+              editingFull = { active: false, resume: false, original: '', caret: 0 };
+              editBox = null;
+              render();
+              if (resume && !player.ended) { try { player.play(); } catch { } }
+              return;
+            }
 
-      // ====== Buttons
-      dlJsonBtn.onclick = () => dl((document.title || 'transcript') + '.json', buildJson(), 'application/json');
-      dlVttBtn.onclick = () => dl((document.title || 'transcript') + '.vtt', buildVtt(), 'text/vtt');
+            // ... your existing pipeline that calls buildFromBaseline(...) ...
+            currentTokens = buildFromBaseline(baselineTokens, newText); // or your equivalent
+            data = tokensToData(currentTokens);
 
-      // ====== Init
-      (async () => { try { await loadFolders(); } catch (e) { showErr('שגיאה בדפדוף: ' + (e.message || e)); } })();
-    })();
-  </script>
+            editingFull = { active: false, resume: false, original: '', caret: 0 };
+            editBox = null;
+            render();
+            if (resume && !player.ended) { try { player.play(); } catch { } }
+          }
+
+          function cancelFullEdit() {
+            if (!editingFull.active) return; const resume = editingFull.resume;
+            editingFull = { active: false, resume: false, original: '', caret: 0 }; editBox = null; render();
+            if (resume && !player.ended) try { player.play() } catch { };
+          }
+
+          // Global Undo/Redo
+          document.addEventListener('keydown', (e) => {
+            const isZ = (e.key === 'z' || e.key === 'Z');
+            if (e.ctrlKey && isZ && !e.shiftKey) { e.preventDefault(); if (undoStack.length) { redoStack.push(snapshot()); currentTokens = undoStack.pop(); data = tokensToData(currentTokens); render(); if (editBox) editBox.textContent = getFullText(); } }
+            else if (e.ctrlKey && e.shiftKey && isZ) { e.preventDefault(); if (redoStack.length) { undoStack.push(snapshot()); currentTokens = redoStack.pop(); data = tokensToData(currentTokens); render(); if (editBox) editBox.textContent = getFullText(); } }
+          });
+
+          function tokensToData(tokens) {
+            const text = wordsToText(tokens);
+            const segs = [];
+            let words = [];
+            let pendingWS = '';
+            let pendingS = Infinity;
+            for (const t of tokens) {
+              if (t.state === 'del') continue;
+              if (t.word === '\n') {
+                // ignore trailing pendingWS
+                segs.push(words);
+                words = [];
+                pendingWS = '';
+                pendingS = Infinity;
+                continue;
+              }
+              const is_ws = /^\s$/u.test(t.word);
+              if (is_ws) {
+                pendingWS += t.word;
+                if (Number.isFinite(t.start)) pendingS = Math.min(pendingS, t.start);
+              } else {
+                const start = Number.isFinite(pendingS) ? Math.min(pendingS, t.start) : t.start;
+                words.push({ word: pendingWS + t.word, start, end: t.end });
+                pendingWS = '';
+                pendingS = Infinity;
+              }
+            }
+            if (words.length) segs.push(words);
+            return {
+              text, segments: segs.map(ws => {
+                const startsArr = ws.filter(w => Number.isFinite(w.start)).map(w => w.start);
+                const endsArr = ws.filter(w => Number.isFinite(w.end)).map(w => w.end);
+                const t0 = startsArr.length > 0 ? Math.min(...startsArr) : 0;
+                const t1 = endsArr.length > 0 ? Math.max(...endsArr) : 0.25;
+                return { start: t0, end: t1, text: ws.map(w => w.word).join(''), words };
+              })
+            };
+          }
+
+          // ====== Browser (folders/files)
+          function extractItems(json) { if (Array.isArray(json)) return json; if (json && Array.isArray(json.items)) return json.items; if (json && Array.isArray(json.tree)) return json.tree; if (json && Array.isArray(json.siblings)) return json.siblings; return []; }
+          function filterImmediate(items, base) { const depth = base ? base.split('/').filter(Boolean).length : 0; return items.filter(x => { const p = x.path || x.rpath || ''; if (base && !p.startsWith(base + '/')) return false; const d = p.split('/').filter(Boolean).length; return d === depth + 1; }); }
+          async function listTree(path = '') {
+            const base = 'https://huggingface.co/api/datasets/ivrit-ai/audio-v2-opus/tree/main';
+            const urls = path ? [`${base}/${encPath(path)}`, `${base}?path=${encodeURIComponent(path)}`] : [base, `${base}?recursive=false`];
+            let lastErr = null; for (const url of urls) { try { const r = await fetchAuth(url, { headers: { Accept: 'application/json' } }); if (r.status === 401 && !getTok()) throw new Error('401: דרוש hf_ token לדפדוף'); if (!r.ok) { lastErr = new Error('שגיאת רשת (' + r.status + ') בדפדוף'); continue; } const j = await r.json(); return filterImmediate(extractItems(j), path || ''); } catch (e) { lastErr = e; } } throw lastErr || new Error('שגיאה בדפדוף');
+          }
+          async function loadFolders() { foldersEl.innerHTML = '<div class="hint">טוען תיקיות…</div>'; try { const items = await listTree(''); const dirs = items.filter(x => (x.type === 'directory' || x.type === 'tree' || x.type === 'dir')).map(x => x.path.split('/').pop()).sort((a, b) => a.localeCompare(b, 'he')); foldersEl.innerHTML = dirs.map(d => `<button class=\"item\" data-folder=\"${d}\">${d}</button>`).join(''); } catch (e) { foldersEl.innerHTML = `<div class="err">${e.message || e}</div>`; } }
+          foldersEl.onclick = e => { const item = e.target.closest('.item[data-folder]'); if (item) selectFolder(item.dataset.folder, item); };
+          async function selectFolder(folder, node) { [...foldersEl.children].forEach(el => el.classList.toggle('active', el === node)); filesEl.innerHTML = '<div class="hint">טוען קבצים…</div>'; try { const items = await listTree(folder); const files = items.filter(x => { const t = (x.type || '').toLowerCase(), p = x.path || ''; return t === 'file' || t === 'blob' || t === 'lfs' || p.toLowerCase().endsWith('.opus'); }).map(x => (x.path || '').split('/').pop()).sort((a, b) => a.localeCompare(b, 'he')); filesEl.innerHTML = files.length ? files.map(f => `<button class=\"item\" data-folder=\"${folder}\" data-file=\"${f}\">${f}</button>`).join('') : '<div class="hint">אין קבצי OPUS בתיקייה זו</div>'; } catch (e) { filesEl.innerHTML = `<div class="err">${e.message || e}</div>`; } }
+          filesEl.onclick = e => { const item = e.target.closest('.item[data-file]'); if (item) selectEpisode(item.dataset.folder, item.dataset.file, item); };
+          function selectEpisode(folder, file, node) { if (node) { if (currentFileNode) currentFileNode.classList.remove('active'); currentFileNode = node; currentFileNode.classList.add('active'); } const { audioPath, trPath } = normPaths(folder, file); load(audioPath, trPath); }
+
+          // ====== Load (audio + transcript)
+          async function load(audioPath, trPath) {
+            if (currentFileNode) currentFileNode.classList.add('loading');
+            try {
+              showErr(''); clearTr(); status.textContent = 'טוען…'; undoStack = []; redoStack = [];
+              // Transcript
+              const trUrl = transUrl(trPath); let r = await fetchAuth(trUrl);
+              if (r.status === 401 && !getTok()) throw new Error('401: דרוש hf_ token לתמליל');
+              if (!r.ok) throw new Error('שגיאת רשת (' + r.status + ') בתמליל');
+              let txt, ct = (r.headers.get('content-type') || '').toLowerCase();
+              if (ct.includes('application/gzip') || trPath.endsWith('.gz')) {
+                const ab = await r.arrayBuffer(); txt = new TextDecoder('utf-8').decode(pako.ungzip(new Uint8Array(ab)));
+              } else { txt = await r.text(); }
+              const raw = JSON.parse(txt);
+              data = normData(raw);
+              baselineTokens = flattenToTokens(data);
+              currentTokens = baselineTokens.map(t => ({ word: t.word, start: t.start, end: t.end, state: 'keep' }));
+              data = tokensToData(currentTokens);
+              render();
+
+              // Audio
+              const aUrl = opusUrl(audioPath);
+              if (getTok() && isHf(aUrl)) {
+                const ar = await fetchAuth(aUrl); if (ar.status === 401) throw new Error('401: דרוש hf_ token לאודיו'); if (!ar.ok) throw new Error('שגיאה (' + ar.status + ') באודיו');
+                const b = await ar.blob(); if (objUrl) URL.revokeObjectURL(objUrl); objUrl = URL.createObjectURL(b); player.src = objUrl;
+              } else { player.src = aUrl; }
+              player.playbackRate = parseFloat(rate.value) || 1;
+              const nice = (() => { try { return decodeURIComponent(new URL(aUrl).pathname.split('/').pop()) } catch { return aUrl } })();
+              meta.innerHTML = `קובץ: <b>${nice}</b> · <a href="${aUrl}" target="_blank" rel="noopener">קישור</a>`;
+              status.textContent = 'מוכן'; player.currentTime = .01;
+            } catch (e) { status.textContent = 'שגיאה'; showErr(e.message || e); alert(e.message || e); }
+            finally { if (currentFileNode) currentFileNode.classList.remove('loading'); }
+          }
+
+          // ====== Normalization helper (unchanged core)
+          const normData = raw => { const d = JSON.parse(JSON.stringify(raw || {})); d.text = d.text || ''; d.segments = Array.isArray(d.segments) ? d.segments : []; d.segments.forEach(s => { if (!Array.isArray(s.words) || !s.words.length) { s.words = [{ word: s.text || ' ', start: +s.start || 0, end: +s.end || (+s.start || 0) + .5 }] } else s.words.forEach(w => { w.start = +w.start || 0; w.end = +w.end || w.start + .25; w.word = String(w.word || '') }) }); return d };
+
+          // ====== Exports (use currentTokens, preserve whitespace, ignore deleted tokens)
+          const vttTime = t => { const h = ('0' + Math.floor(t / 3600)).slice(-2), m = ('0' + Math.floor(t % 3600 / 60)).slice(-2), s = ('0' + Math.floor(t % 60)).slice(-2), ms = ('00' + Math.floor((t % 1) * 1000)).slice(-3); return `${h}:${m}:${s}.${ms}` };
+          const buildVtt = () => {
+            let out = 'WEBVTT\n\n';
+            let cueWords = [], cueStart = null, cueEnd = null, cueIndex = 1;
+            function flush() { if (!cueWords.length) return; out += `${cueIndex++}\n${vttTime(cueStart)} --> ${vttTime(cueEnd)}\n${cueWords.join('')}\n\n`; cueWords = []; cueStart = null; cueEnd = null; }
+            currentTokens.forEach(t => {
+              if (t.state === 'del') return; // skip deleted
+              if (t.word === '\n') { flush(); return; }
+              cueWords.push(t.word);
+              if (Number.isFinite(t.start)) cueStart = (cueStart == null) ? t.start : Math.min(cueStart, t.start);
+              if (Number.isFinite(t.end)) cueEnd = (cueEnd == null) ? t.end : Math.max(cueEnd, t.end);
+            });
+            flush();
+            return out;
+          };
+
+          const buildJson = () => {
+            const segs = [];
+            let words = [];
+            let pendingWS = '';
+            let pendingS = Infinity;
+            for (const t of currentTokens) {
+              if (t.state === 'del') continue;
+              if (t.word === '\n') {
+                // ignore trailing pendingWS
+                segs.push(words);
+                words = [];
+                pendingWS = '';
+                pendingS = Infinity;
+                continue;
+              }
+              const is_ws = /^\s$/u.test(t.word);
+              if (is_ws) {
+                pendingWS += t.word;
+                if (Number.isFinite(t.start)) pendingS = Math.min(pendingS, t.start);
+              } else {
+                const start = Number.isFinite(pendingS) ? Math.min(pendingS, t.start) : t.start;
+                words.push({ word: pendingWS + t.word, start, end: t.end });
+                pendingWS = '';
+                pendingS = Infinity;
+              }
+            }
+            if (words.length) segs.push(words);
+            const text = segs.map(ws => ws.map(w => w.word).join('')).join('\n');
+            const out = {
+              text,
+              segments: segs.map(ws => {
+                const startsArr = ws.filter(w => Number.isFinite(w.start)).map(w => w.start);
+                const endsArr = ws.filter(w => Number.isFinite(w.end)).map(w => w.end);
+                const t0 = startsArr.length > 0 ? Math.min(...startsArr) : 0;
+                const t1 = endsArr.length > 0 ? Math.max(...endsArr) : 0.25;
+                return { start: t0, end: t1, text: ws.map(w => w.word).join(''), words: ws };
+              })
+            };
+            return JSON.stringify(out, null, 2);
+          };
+
+          const dl = (name, blob, type) => { const a = document.createElement('a'); const url = URL.createObjectURL(new Blob([blob], { type })); a.href = url; a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000) };
+
+          // ====== Playback UI
+          const idxAt = t => { let lo = 0, hi = starts.length - 1, ans = -1; while (lo <= hi) { const m = (lo + hi) >> 1; if (starts[m] <= t) { ans = m; lo = m + 1 } else hi = m - 1 } if (ans >= 0 && t > (ends[ans] || starts[ans] + .25) && ans + 1 < starts.length && starts[ans + 1] <= t) ans++; return ans };
+          const tick = () => { const t = player.currentTime, i = idxAt(t); if (i !== lastIdx) { if (lastIdx >= 0 && wordEls[lastIdx]) wordEls[lastIdx].classList.remove('active'); if (i >= 0 && wordEls[i]) { const el = wordEls[i]; el.classList.add('active'); if (autoScroll.checked) { const b = el.getBoundingClientRect(), c = tr.getBoundingClientRect(); if (b.top < c.top + 40 || b.bottom > c.bottom - 40) el.scrollIntoView({ behavior: 'smooth', block: 'center' }) } } lastIdx = i } status.textContent = `${t2(t)} / ${t2(player.duration || 0)}` };
+          player.addEventListener('timeupdate', tick);
+          player.addEventListener('ratechange', () => { rate.value = String(player.playbackRate); rateVal.textContent = '×' + player.playbackRate.toFixed(2) });
+          rate.oninput = () => { player.playbackRate = parseFloat(rate.value) || 1; rateVal.textContent = '×' + player.playbackRate.toFixed(2) };
+          const by = s => () => player.currentTime = Math.max(0, Math.min(player.duration || 0, player.currentTime + s));
+          $('back5').onclick = by(-5); $('fwd5').onclick = by(+5); $('back30').onclick = by(-30); $('fwd30').onclick = by(+30);
+
+          // ====== Settings modal
+          const openM = () => { modal.classList.add('open'); hfTokenInput.value = getTok(); };
+          const closeM = () => { modal.classList.remove('open'); };
+          settingsBtn.onclick = openM; mClose.onclick = closeM; mSave.onclick = () => { setTok(hfTokenInput.value.trim()); closeM() }; mClear.onclick = () => { setTok(''); hfTokenInput.value = '' }; modal.addEventListener('click', e => { if (e.target === modal) closeM() });
+
+          // ====== Browser collapse toggle
+          function setCollapsed(on) { browserCard.classList.toggle('collapsed', on); panel.classList.toggle('browser-collapsed', on); toggleBrowser.textContent = on ? 'הרחב' : 'מזער'; expandBrowser.classList.toggle('hidden', !on); }
+          toggleBrowser.onclick = () => setCollapsed(!browserCard.classList.contains('collapsed'));
+          expandBrowser.onclick = () => setCollapsed(false);
+
+          // ====== Buttons
+          dlJsonBtn.onclick = () => dl((document.title || 'transcript') + '.json', buildJson(), 'application/json');
+          dlVttBtn.onclick = () => dl((document.title || 'transcript') + '.vtt', buildVtt(), 'text/vtt');
+
+          // ====== Init
+          (async () => { try { await loadFolders(); } catch (e) { showErr('שגיאה בדפדוף: ' + (e.message || e)); } })();
+
+          let fontSize = 1.05; // starting rem (matches your CSS)
+
+          function applyFontSize() {
+            transcriptEl.style.fontSize = fontSize.toFixed(2) + "rem";
+            if (editBox) {
+              editBox.style.fontSize = fontSize.toFixed(2) + "rem";
+            }
+          }
+
+
+          fontPlus.onclick = () => {
+            fontSize = Math.min(fontSize + 0.1, 2.0); // cap at 2rem
+            applyFontSize();
+          };
+
+          fontMinus.onclick = () => {
+            fontSize = Math.max(fontSize - 0.1, 0.6); // cap at 0.6rem
+            applyFontSize();
+          };
+
+          // ====== Scroll-to-top button
+          const scrollTopBtn = document.getElementById("scrollTopBtn");
+          window.addEventListener("scroll", () => {
+            scrollTopBtn.style.display = (document.documentElement.scrollTop > 300) ? "block" : "none";
+          });
+          scrollTopBtn.addEventListener("click", () => {
+            const start = document.documentElement.scrollTop || document.body.scrollTop;
+            const duration = 500; // ms
+            const startTime = performance.now();
+
+            function easeInOutQuad(t) {
+              return t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+            }
+
+            function step(now) {
+              const elapsed = now - startTime;
+              const progress = Math.min(elapsed / duration, 1);
+              const eased = easeInOutQuad(progress);
+              const current = start * (1 - eased);
+              document.documentElement.scrollTop = current;
+              document.body.scrollTop = current; // for Safari
+              if (elapsed < duration) requestAnimationFrame(step);
+            }
+
+            requestAnimationFrame(step);
+          });
+
+
+
+        })();
+      </script>
+
 </body>
 
 </html>
