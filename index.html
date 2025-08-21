@@ -4,7 +4,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>נגן אודיו + תמליל (HF • OPUS בלבד)</title>
+  <title>Crowd Correction For Podcast</title>
   <style>
     :root {
       --bg: #0b0f14;
@@ -410,19 +410,18 @@
       let undoStack = [], redoStack = [];
 
       const TOKEN_KEY = 'hfToken';
-      
-      
+
+
       ///// HARD CODED TOKEN //////////
-      
+
       // BEFORE:
 
       // const getTok = () => localStorage.getItem(TOKEN_KEY) || '';
-      
+      // const setTok = t => t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY);
       // AFTER:
-      
-      const getTok = () => "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";
-      const setTok = t => t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY);
 
+      const getTok = () => "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";
+      const setTok = () => {};
       // ====== Utils
 
       // HARD CODED TOKEN DEBUG:
