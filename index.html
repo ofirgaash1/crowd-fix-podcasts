@@ -214,6 +214,14 @@
       background-color: #4f4dd1;
     }
 
+    #submitBtn {
+      font-size: 0.9rem;
+      padding: 0.4rem 0.7rem;
+      min-width: 2.2rem;
+      color: #0b0f14;
+      background-color: #00ff0db7;
+    }
+
     /* Transcript look */
     .transcript {
       white-space: pre-wrap;
@@ -391,8 +399,10 @@
         <div class="head">
           <div>תמליל</div>
           <div>
+            <button id="submitBtn" class="pill">⬆️ שמור תיקון</button>
             <button id="fontMinus" class="pill">A−</button>
             <button id="fontPlus" class="pill">A+</button>
+
           </div>
         </div>
         <div id="transcript" class="body transcript"></div>
@@ -413,8 +423,18 @@
       </div>
       <button id="scrollTopBtn" title="חזור למעלה">⬆️</button>
       <script src="https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako.min.js"></script>
-      <script>
-        (() => {
+      <!-- Load Supabase client -->
+      <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+
+      <script type="module">
+        (async () => {
+          // ===== Supabase setup =====
+          const { createClient } = supabase;
+          const supabaseUrl = "https://xblbzxyyoptnfrlffigv.supabase.co";
+          const supabaseKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhibGJ6eHl5b3B0bmZybGZmaWd2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTU3ODI1MjgsImV4cCI6MjA3MTM1ODUyOH0.eIB279AoKwL5mrXuX1BQxa1mevVXMPrZK2VLaZ5kTNE";
+          const supa = createClient(supabaseUrl, supabaseKey);
+
           // ====== El refs
           const $ = (id) => document.getElementById(id);
           const player = $('player'), tr = $('transcript'), status = $('status'), meta = $('meta'), err = $('err');
@@ -433,6 +453,7 @@
           let editingFull = { active: false, resume: false, original: '', caret: 0 };
           let editBox = null; // contentEditable div
           let currentFileNode = null;
+          let correctionsCache = new Set();
 
           // Baseline/current token streams (flattened, include \n tokens)
           let baselineTokens = []; // immutable
@@ -457,6 +478,9 @@
           const clearTr = () => { tr.innerHTML = ''; wordEls = []; starts = []; ends = []; lastIdx = -1 };
           const showErr = m => { err.textContent = m || '' };
           const deepCopy = x => JSON.parse(JSON.stringify(x));
+
+          await loadAllCorrections();
+
 
           function tokenize(text) {
             const out = [];
@@ -890,44 +914,217 @@
           }
           async function loadFolders() { foldersEl.innerHTML = '<div class="hint">טוען תיקיות…</div>'; try { const items = await listTree(''); const dirs = items.filter(x => (x.type === 'directory' || x.type === 'tree' || x.type === 'dir')).map(x => x.path.split('/').pop()).sort((a, b) => a.localeCompare(b, 'he')); foldersEl.innerHTML = dirs.map(d => `<button class=\"item\" data-folder=\"${d}\">${d}</button>`).join(''); } catch (e) { foldersEl.innerHTML = `<div class="err">${e.message || e}</div>`; } }
           foldersEl.onclick = e => { const item = e.target.closest('.item[data-folder]'); if (item) selectFolder(item.dataset.folder, item); };
-          async function selectFolder(folder, node) { [...foldersEl.children].forEach(el => el.classList.toggle('active', el === node)); filesEl.innerHTML = '<div class="hint">טוען קבצים…</div>'; try { const items = await listTree(folder); const files = items.filter(x => { const t = (x.type || '').toLowerCase(), p = x.path || ''; return t === 'file' || t === 'blob' || t === 'lfs' || p.toLowerCase().endsWith('.opus'); }).map(x => (x.path || '').split('/').pop()).sort((a, b) => a.localeCompare(b, 'he')); filesEl.innerHTML = files.length ? files.map(f => `<button class=\"item\" data-folder=\"${folder}\" data-file=\"${f}\">${f}</button>`).join('') : '<div class="hint">אין קבצי OPUS בתיקייה זו</div>'; } catch (e) { filesEl.innerHTML = `<div class="err">${e.message || e}</div>`; } }
+
+          // ====== Helper to paint one file red/green ======
+          function markFile(filePath, hasCorrection) {
+            const fileName = filePath.split("/").pop();
+            const el = filesEl.querySelector(`[data-file="${fileName}"]`);
+            if (!el) return;
+            el.style.background = hasCorrection
+              ? "rgba(0,255,0,.08)"  // green
+              : "rgba(255,0,0,.08)"; // red
+          }
+          async function fetchCorrections(filePaths) {
+            const results = [];
+            const chunkSize = 50;
+            for (let i = 0; i < filePaths.length; i += chunkSize) {
+              const chunk = filePaths.slice(i, i + chunkSize);
+              const { data, error } = await supa
+                .from("corrections")
+                .select("file_path")
+                .in("file_path", chunk);
+              if (error) throw error;
+              results.push(...data);
+            }
+            return results;
+          }
+
+          async function loadAllCorrections() {
+            try {
+              const { data, error } = await supa
+                .from("corrections")
+                .select("file_path");
+
+              if (error) throw error;
+
+              correctionsCache = new Set(data.map(r => r.file_path));
+              console.log("✅ Corrections loaded:", correctionsCache.size);
+            } catch (e) {
+              console.error("❌ Failed to load corrections:", e.message || e);
+            }
+          }
+          // ====== Select folder and render files ======
+          // ====== Select folder and render files ======
+          async function selectFolder(folder, node) {
+            // highlight active folder in sidebar
+            [...foldersEl.children].forEach(el =>
+              el.classList.toggle("active", el === node)
+            );
+
+            filesEl.innerHTML = '<div class="hint">טוען קבצים…</div>';
+
+            try {
+              const items = await listTree(folder);
+
+              const files = items
+                .filter(x => {
+                  const t = (x.type || "").toLowerCase();
+                  const p = x.path || "";
+                  return (
+                    t === "file" ||
+                    t === "blob" ||
+                    t === "lfs" ||
+                    p.toLowerCase().endsWith(".opus")
+                  );
+                })
+                .map(x => (x.path || "").split("/").pop())
+                .sort((a, b) => a.localeCompare(b, "he"));
+
+              if (!files.length) {
+                filesEl.innerHTML = '<div class="hint">אין קבצי OPUS בתיקייה זו</div>';
+                return;
+              }
+
+              // render the file buttons
+              filesEl.innerHTML = files
+                .map(
+                  f =>
+                    `<button class="item" data-folder="${folder}" data-file="${f}">${f}</button>`
+                )
+                .join("");
+
+              // ===== crosscheck corrections from cache =====
+              files.forEach(f => {
+                const fp = folder + "/" + f;
+                markFile(fp, correctionsCache.has(fp));
+              });
+
+            } catch (e) {
+              filesEl.innerHTML = `<div class="err">${e.message || e}</div>`;
+            }
+          }
+
+
+
           filesEl.onclick = e => { const item = e.target.closest('.item[data-file]'); if (item) selectEpisode(item.dataset.folder, item.dataset.file, item); };
           function selectEpisode(folder, file, node) { if (node) { if (currentFileNode) currentFileNode.classList.remove('active'); currentFileNode = node; currentFileNode.classList.add('active'); } const { audioPath, trPath } = normPaths(folder, file); load(audioPath, trPath); }
 
-          // ====== Load (audio + transcript)
-          async function load(audioPath, trPath) {
-            if (currentFileNode) currentFileNode.classList.add('loading');
-            try {
-              showErr(''); clearTr(); status.textContent = 'טוען…'; undoStack = []; redoStack = [];
-              // Transcript
-              const trUrl = transUrl(trPath); let r = await fetchAuth(trUrl);
-              if (r.status === 401 && !getTok()) throw new Error('401: דרוש hf_ token לתמליל');
-              if (!r.ok) throw new Error('שגיאת רשת (' + r.status + ') בתמליל');
-              let txt, ct = (r.headers.get('content-type') || '').toLowerCase();
-              if (ct.includes('application/gzip') || trPath.endsWith('.gz')) {
-                const ab = await r.arrayBuffer(); txt = new TextDecoder('utf-8').decode(pako.ungzip(new Uint8Array(ab)));
-              } else { txt = await r.text(); }
-              const raw = JSON.parse(txt);
-              data = normData(raw);
-              baselineTokens = flattenToTokens(data);
-              currentTokens = baselineTokens.map(t => ({ word: t.word, start: t.start, end: t.end, state: 'keep' }));
-              data = tokensToData(currentTokens);
-              render();
 
-              // Audio
+          // ====== Load (audio + transcript) ======
+          async function load(audioPath, trPath) {
+            if (currentFileNode) currentFileNode.classList.add("loading");
+            try {
+              showErr("");
+              clearTr();
+              status.textContent = "טוען…";
+              undoStack = [];
+              redoStack = [];
+
+              // ===== Try Supabase first =====
+              let corrected = null;
+              try {
+                const { data, error } = await supa
+                  .from("corrections")
+                  .select("json_data")
+                  .eq("file_path", audioPath) // using audioPath as the unique key
+                  .maybeSingle();
+
+                if (error) {
+                  console.warn("Supabase fetch error:", error);
+                } else if (data) {
+                  corrected = data.json_data;
+                  console.log("✅ Loaded corrected JSON from Supabase");
+
+                  // ✅ mark this file green immediately
+                  markFile(audioPath, true);
+                }
+              } catch (dbErr) {
+                console.warn("Supabase query failed:", dbErr);
+              }
+
+              if (corrected) {
+                // Use corrected transcript
+                data = normData(corrected);
+                baselineTokens = flattenToTokens(data);
+                currentTokens = baselineTokens.map(t => ({
+                  word: t.word,
+                  start: t.start,
+                  end: t.end,
+                  state: "keep"
+                }));
+                data = tokensToData(currentTokens);
+                render();
+              } else {
+                // ===== Fallback: Hugging Face transcript =====
+                const trUrl = transUrl(trPath);
+                let r = await fetchAuth(trUrl);
+                if (r.status === 401 && !getTok())
+                  throw new Error("401: דרוש hf_ token לתמליל");
+                if (!r.ok) throw new Error("שגיאת רשת (" + r.status + ") בתמליל");
+
+                let txt,
+                  ct = (r.headers.get("content-type") || "").toLowerCase();
+                if (ct.includes("application/gzip") || trPath.endsWith(".gz")) {
+                  const ab = await r.arrayBuffer();
+                  txt = new TextDecoder("utf-8").decode(
+                    pako.ungzip(new Uint8Array(ab))
+                  );
+                } else {
+                  txt = await r.text();
+                }
+
+                const raw = JSON.parse(txt);
+                data = normData(raw);
+                baselineTokens = flattenToTokens(data);
+                currentTokens = baselineTokens.map(t => ({
+                  word: t.word,
+                  start: t.start,
+                  end: t.end,
+                  state: "keep"
+                }));
+                data = tokensToData(currentTokens);
+                render();
+
+                // ✅ mark red if no correction found
+                markFile(audioPath, false);
+              }
+
+              // ===== Audio load =====
               const aUrl = opusUrl(audioPath);
               if (getTok() && isHf(aUrl)) {
-                const ar = await fetchAuth(aUrl); if (ar.status === 401) throw new Error('401: דרוש hf_ token לאודיו'); if (!ar.ok) throw new Error('שגיאה (' + ar.status + ') באודיו');
-                const b = await ar.blob(); if (objUrl) URL.revokeObjectURL(objUrl); objUrl = URL.createObjectURL(b); player.src = objUrl;
-              } else { player.src = aUrl; }
-              player.playbackRate = parseFloat(rate.value) || 1;
-              const nice = (() => { try { return decodeURIComponent(new URL(aUrl).pathname.split('/').pop()) } catch { return aUrl } })();
-              meta.innerHTML = `קובץ: <b>${nice}</b> · <a href="${aUrl}" target="_blank" rel="noopener">קישור</a>`;
-              status.textContent = 'מוכן'; player.currentTime = .01;
-            } catch (e) { status.textContent = 'שגיאה'; showErr(e.message || e); alert(e.message || e); }
-            finally { if (currentFileNode) currentFileNode.classList.remove('loading'); }
-          }
+                const ar = await fetchAuth(aUrl);
+                if (ar.status === 401)
+                  throw new Error("401: דרוש hf_ token לאודיו");
+                if (!ar.ok) throw new Error("שגיאה (" + ar.status + ") באודיו");
+                const b = await ar.blob();
+                if (objUrl) URL.revokeObjectURL(objUrl);
+                objUrl = URL.createObjectURL(b);
+                player.src = objUrl;
+              } else {
+                player.src = aUrl;
+              }
 
+              player.playbackRate = parseFloat(rate.value) || 1;
+              const nice = (() => {
+                try {
+                  return decodeURIComponent(
+                    new URL(aUrl).pathname.split("/").pop()
+                  );
+                } catch {
+                  return aUrl;
+                }
+              })();
+              meta.innerHTML = `קובץ: <b>${nice}</b> · <a href="${aUrl}" target="_blank" rel="noopener">קישור</a>`;
+              status.textContent = "מוכן";
+              player.currentTime = 0.01;
+            } catch (e) {
+              status.textContent = "שגיאה";
+              showErr(e.message || e);
+              alert(e.message || e);
+            } finally {
+              if (currentFileNode) currentFileNode.classList.remove("loading");
+            }
+          }
           // ====== Normalization helper (unchanged core)
           const normData = raw => { const d = JSON.parse(JSON.stringify(raw || {})); d.text = d.text || ''; d.segments = Array.isArray(d.segments) ? d.segments : []; d.segments.forEach(s => { if (!Array.isArray(s.words) || !s.words.length) { s.words = [{ word: s.text || ' ', start: +s.start || 0, end: +s.end || (+s.start || 0) + .5 }] } else s.words.forEach(w => { w.start = +w.start || 0; w.end = +w.end || w.start + .25; w.word = String(w.word || '') }) }); return d };
 
@@ -1025,6 +1222,57 @@
               editBox.style.fontSize = fontSize.toFixed(2) + "rem";
             }
           }
+          async function saveCorrection(filePath, jsonObj) {
+            const { data, error } = await supa
+              .from("corrections")
+              .upsert(
+                { file_path: filePath, json_data: jsonObj },
+                { onConflict: "file_path" }   // ✅ important
+              )
+              .select();
+
+            if (error) {
+              console.error("❌ Save failed:", error);
+              alert("שמירת תיקון נכשלה: " + (error.message || error));
+              return null;
+            }
+
+            console.log("✅ Correction saved:", data);
+
+            // 🔄 refresh global cache so the green/red marking is always accurate
+            await loadAllCorrections();
+
+            return data[0];
+          }
+
+          // ✅ Button handler calls saveCorrection()
+          $('submitBtn').onclick = async () => {
+            try {
+              const json = JSON.parse(buildJson());
+              const filePath = currentFileNode
+                ? currentFileNode.dataset.folder + "/" + currentFileNode.dataset.file
+                : null;
+
+              if (!filePath) {
+                alert("אין קובץ נבחר");
+                return;
+              }
+
+              const saved = await saveCorrection(filePath, json);
+              if (saved) {
+                alert("✅ נשמר בהצלחה למסד הנתונים!");
+
+                // refresh red/green status instantly
+                const el = filesEl.querySelector(
+                  `[data-file="${currentFileNode.dataset.file}"]`
+                );
+                if (el) el.style.background = "rgba(0,255,0,.08)";
+              }
+            } catch (e) {
+              console.error(e);
+              alert("❌ שגיאה בשמירת תיקון: " + e.message);
+            }
+          };
 
 
           fontPlus.onclick = () => {
