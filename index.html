@@ -785,7 +785,6 @@
             const resume = !!editingFull.resume;
 
             const newText = (editBox && (editBox.innerText || '')).replace(/\r/g, '');
-            // >>> Early exit if nothing changed (prevents any re-tokenize/diff)
             if (newText === (editingFull.original || '')) {
               editingFull = { active: false, resume: false, original: '', caret: 0 };
               editBox = null;
@@ -794,8 +793,11 @@
               return;
             }
 
-            // ... your existing pipeline that calls buildFromBaseline(...) ...
-            currentTokens = buildFromBaseline(baselineTokens, newText); // or your equivalent
+            // ✅ Save state for undo before applying change
+            undoStack.push(snapshot());
+            redoStack = [];
+
+            currentTokens = buildFromBaseline(baselineTokens, newText);
             data = tokensToData(currentTokens);
 
             editingFull = { active: false, resume: false, original: '', caret: 0 };
@@ -803,6 +805,7 @@
             render();
             if (resume && !player.ended) { try { player.play(); } catch { } }
           }
+
 
           function cancelFullEdit() {
             if (!editingFull.active) return; const resume = editingFull.resume;
