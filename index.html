@@ -374,7 +374,7 @@
     <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="t">
       <h3 id="t">Hugging Face Token</h3>
       <div class="p">
-        <div class="row"><input id="hfToken" type="password" placeholder="hf_XXXXXXXXXXXXXXXXXX" style="width:100%">
+        <div class="row"><input id="hfToken" type="password" placeholder="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" style="width:100%">
         </div>
         <p class="hint">נשמר מקומית בלבד; נשלח רק ל-huggingface.co. קבצי אודיו נטענים כ-Blob כאשר נדרש.</p>
       </div>
@@ -409,7 +409,7 @@
       // History for undo/redo (snapshots of currentTokens)
       let undoStack = [], redoStack = [];
 
-      const TOKEN_KEY = 'hfToken';
+      const TOKEN_KEY = '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';
       const getTok = () => localStorage.getItem(TOKEN_KEY) || '';
       const setTok = t => t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY);
 
