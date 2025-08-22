@@ -6,36 +6,84 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Crowd Podcast Correction Interface</title>
   <style>
+    /* Diff colors like your demo */
+    #diffBody {
+      white-space: pre-wrap;
+      line-height: 1.9;
+      /* match transcript */
+      font-size: var(--text-size);
+      /* match transcript */
+      font-family: "Noto Sans Hebrew", "Rubik", Arial, sans-serif;
+    }
+
+
+
     :root {
+      --text-size: 1.10rem;
+      --gutter-size: 6px;
       --bg: #0b0f14;
       --panel: #121926;
       --ink: #e6edf3;
       --muted: #9fb0c0;
       --brand: #78b6ff;
       --accent: #ffd36e;
-      --danger: #ff7a7a
+      --danger: #ff7a7a;
+      --focus: #78b6ff;
     }
 
-    html,
-    body {
-      height: 100%
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box
     }
+
+
 
     body {
       margin: 0;
       background: var(--bg);
       color: var(--ink);
-      font: 16px/1.5 system-ui, -apple-system, Segoe UI, Roboto, "Noto Sans", "Helvetica Neue", Arial
+      font: 16px/1.5 system-ui, -apple-system, Segoe UI, Roboto, "Noto Sans", "Helvetica Neue", Arial;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
     }
 
     a {
       color: var(--brand)
     }
 
+    a:focus-visible {
+      outline: 2px solid var(--focus);
+      outline-offset: 2px
+    }
+
+    .visually-hidden {
+      position: absolute !important;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0 0 0 0);
+      white-space: nowrap;
+      border: 0
+    }
+
+    /* Selection */
+    ::selection {
+      background: rgba(120, 182, 255, .35)
+    }
+
+    /* Inputs pick up the brand */
+    input[type="checkbox"],
+    input[type="range"] {
+      accent-color: var(--brand)
+    }
+
     .wrap {
       display: grid;
       grid-template-rows: auto 1fr;
-      height: 100%
+      height: 100%;
     }
 
     header {
@@ -75,34 +123,130 @@
       border-color: rgba(0, 0, 0, .2)
     }
 
+    button:focus-visible {
+      outline: 2px solid var(--focus);
+      outline-offset: 2px
+    }
+
+    button:disabled {
+      opacity: .6;
+      cursor: not-allowed
+    }
+
     .hidden {
       display: none
     }
 
-    /* Layout */
     #panel {
+      /* start values so you can see them change in DevTools */
+      --w-nav: 380px;
+      --w-diff: 380px;
+
       display: grid;
-      grid-template-columns: minmax(340px, 480px) minmax(280px, 520px) 1fr;
-      gap: 1rem;
-      padding: 1rem;
-      height: calc(100vh - 58px);
-      box-sizing: border-box
+      grid-template-columns: var(--w-nav) 6px 1fr 6px var(--w-diff);
+      grid-template-areas: "browser gutR transcript gutL diff";
+
     }
 
-    #panel.browser-collapsed {
-      grid-template-columns: minmax(280px, 520px) 1fr
+
+    /* Give transcript & diff their own scrollbars */
+    #transcript,
+    #diffBody {
+      max-height: calc(100vh - 100px);
+      /* tweak if needed */
+      overflow: auto;
     }
 
+
+    /* Responsive breakpoints */
+    @media (max-width:1100px) {
+      #panel {
+        grid-template-columns: minmax(300px, 520px) 1fr
+      }
+    }
+
+    @media (max-width:780px) {
+      #panel {
+        grid-template-columns: 1fr;
+        grid-auto-rows: minmax(0, auto)
+      }
+    }
+
+
+
+    /* שיוכים לגריד */
+    #diffCard {
+      grid-area: diff;
+    }
+
+    #transcriptCard {
+      grid-area: transcript;
+    }
+
+    #browserCard {
+      grid-area: browser;
+
+    }
+
+    #gutterL {
+      grid-area: gutL;
+    }
+
+    #gutterR {
+      grid-area: gutR;
+    }
+
+    .gutter {
+      background: rgba(255, 255, 255, .08);
+      cursor: col-resize;
+    }
+
+    .gutter:hover {
+      background: rgba(255, 255, 255, .18)
+    }
+
+    .diff-insert {
+      background: #d4fcdc;
+      color: #064e0d;
+    }
+
+    .diff-delete {
+      background: #ffe2e2;
+      color: #a00;
+      text-decoration: line-through;
+    }
+
+    .diff-equal {
+      color: inherit;
+    }
+
+    html,
+    body {
+      height: 100%
+    }
+
+    * {
+      scrollbar-width: none;
+      /* Firefox */
+      -ms-overflow-style: none;
+      /* IE/Edge Legacy */
+    }
+
+    *::-webkit-scrollbar {
+      display: none;
+    }
+
+    /* Chromium/Safari */
     .card {
       background: var(--panel);
-      border: 1px solid rgba(255, 255, 255, .06);
-      border-radius: 14px;
-      overflow: clip
+
+      overflow: visible;
+      max-height: calc(100vh - 56px);
     }
 
     .card .head {
-      padding: .6rem .9rem;
-      border-bottom: 1px solid rgba(255, 255, 255, .06);
+      padding: 0rem .9rem;
+      margin: 0.5rem;
       color: var(--muted);
       font-size: .9rem;
       display: flex;
@@ -111,8 +255,9 @@
       justify-content: space-between
     }
 
+
     .card .body {
-      padding: .75rem 1rem;
+      margin: 0.4rem;
       max-height: calc(100% - 42px);
       overflow: auto
     }
@@ -122,7 +267,14 @@
       display: grid;
       grid-template-columns: 1fr 1fr;
       gap: .8rem;
-      height: 100%
+      height: 100%;
+      overflow: visible;
+    }
+
+    @media (max-width:780px) {
+      #browserGrid {
+        grid-template-columns: 1fr
+      }
     }
 
     .pane {
@@ -147,7 +299,9 @@
       padding: .5rem;
       display: grid;
       gap: .35rem;
-      align-content: start
+      align-content: start;
+      list-style: none;
+      margin: 0
     }
 
     .item {
@@ -159,7 +313,8 @@
       text-align: right;
       background: none;
       color: inherit;
-      font: inherit
+      font: inherit;
+      overflow: ;
     }
 
     .item:hover {
@@ -176,17 +331,25 @@
       opacity: .6
     }
 
+    .item:focus-visible {
+      outline: 2px solid var(--focus);
+      outline-offset: 2px
+    }
+
     audio {
-      width: 100%;
+      width: 30%;
       height: 36px
     }
 
     .controls {
+      padding: 0rem .9rem;
+
+      color: var(--muted);
+      font-size: .9rem;
       display: flex;
-      gap: .45rem;
       align-items: center;
-      flex-wrap: wrap;
-      margin-top: .5rem
+
+      justify-content: space-between
     }
 
     .pill {
@@ -200,35 +363,35 @@
       cursor: pointer
     }
 
-    .controls button.pill {
-      font-size: 1rem;
-      padding: .2rem .5rem;
-      line-height: 1
-    }
 
+
+    /* Ensure A−/A+ have sufficient contrast */
     #fontMinus,
     #fontPlus {
-      font-size: 0.9rem;
-      padding: 0.5rem 0.7rem;
+      padding: .5rem .7rem;
       min-width: 2.2rem;
       background-color: #4f4dd1;
+      color: var(--ink)
+        /* override .pill muted text */
     }
 
+    /* Save button visibility */
     #submitBtn {
-      font-size: 0.9rem;
-      padding: 0.4rem 0.7rem;
+      font-size: .9rem;
+      padding: .4rem .7rem;
       min-width: 2.2rem;
       color: #0b0f14;
       background-color: #00ff0db7;
+      font-weight: 600
     }
 
     /* Transcript look */
     .transcript {
       white-space: pre-wrap;
-      direction: rtl;
       line-height: 1.9;
-      font-size: 1.1rem;
+      font-size: var(--text-size);
       font-family: "Noto Sans Hebrew", "Rubik", Arial, sans-serif;
+      caret-color: var(--accent);
     }
 
     .word {
@@ -238,6 +401,11 @@
       cursor: pointer
     }
 
+    .word:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px
+    }
+
     .word.active {
       background: rgba(255, 211, 110, .25);
       box-shadow: 0 0 0 1px rgba(255, 211, 110, .25) inset
@@ -245,7 +413,7 @@
 
     /* Highlights */
     .word.added-lite {
-      background: rgba(0, 255, 0, 0.10);
+      background: rgba(0, 255, 0, .10)
     }
 
     .word.deleted {
@@ -263,10 +431,6 @@
       color: var(--danger)
     }
 
-    /* Collapse */
-    .collapsed {
-      display: none
-    }
 
     /* Modal */
     .modal {
@@ -313,122 +477,180 @@
       padding: 0 1rem 1rem
     }
 
+    h2 {
+      margin: -0.1rem;
+      margin-bottom: 0.1remZ;
+    }
+
+    /* Back-to-top button (RTL: keep it on the RIGHT) */
     #scrollTopBtn {
       position: fixed;
       bottom: 20px;
       right: 20px;
-      /* RTL: keep it on the left, but you can change to right if you prefer */
       z-index: 100;
       display: none;
-      background: rgba(221, 221, 221, 0.685);
-      color: #fff;
+      background: rgba(221, 221, 221, .685);
+      color: #000;
+      /* better contrast on light BG */
       border: none;
       border-radius: 50%;
       width: 44px;
       height: 44px;
       font-size: 1.2rem;
       cursor: pointer;
-      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+      box-shadow: 0 2px 6px rgba(0, 0, 0, .4)
     }
 
     #scrollTopBtn:hover {
       background: #5596e6;
+      color: #fff
+    }
+
+    /* Native audio controls theming (WebKit only).
+   NOTE: #9cc2fa with white text had poor contrast; use dark text. */
+    audio::-webkit-media-controls-panel {
+      background-color: #9cc2fa;
+      color: #000000;
+      /* remove invalid unitless margins/paddings from previous version */
+    }
+
+    /* Range input hit area improvements (lightweight) */
+    input[type="range"] {
+      touch-action: manipulation;
+      inline-size: 160px;
+    }
+
+    /* Reduced motion: minimize animations */
+    @media (prefers-reduced-motion: reduce) {
+      * {
+        animation-duration: .001ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: .001ms !important;
+        scroll-behavior: auto !important
+      }
     }
   </style>
-  <!-- removed diff-match-patch import -->
 </head>
 
 <body>
   <div class="wrap">
-    <header>
-      <div class="bar">
-        <label><input id="autoScrollChk" type="checkbox" checked /> גלילה אוטומטית</label>
-        <button id="settingsBtn">⚙️</button>
-        <span style="flex:1"></span>
-        <span id="kbdHelp" class="hint">⌨️ קיצורים: קליק ימני לעריכת הטקסט · · · · · · Enter לשמירה · · · · · · Esc
-          לביטול · · · · · · Ctrl+Z לביטל · · · · · · Ctrl+Shift+Z לשחזור
-        </span>
-        <span style="flex:1"></span>
-        <button id="dlJson">⬇️ JSON</button>
-        <button id="dlVtt">⬇️ VTT</button>
-      </div>
+    <header role="banner">
+
+
+      <section class="card" id="playerCard" aria-labelledby="playerCardTitle">
+        <h2 id="playerCardTitle" class="visually-hidden">נגן אודיו</h2>
+        <div class="head">
+
+
+          <button id="settingsBtn" type="button" aria-haspopup="dialog" aria-controls="modal" title="הגדרות">⚙️</button>
+
+
+          <details class="hint" id="kbdHelp">
+            <summary aria-label="קיצורי מקלדת">⌨️ קיצורים</summary>
+            <div>
+              קליק ימני לעריכת הטקסט · Enter לשמירה · Esc לביטול · Ctrl+Z לביטול · Ctrl+Shift+Z לשחזור
+            </div>
+          </details>
+
+
+
+          <button class="pill" id="dlVtt" type="button" title="הורד VTT" aria-label="הורד VTT">⬇️ VTT</button>
+          <audio id="player" controls crossorigin="anonymous" preload="metadata" aria-describedby="meta err"></audio>
+
+          <label for="rate">מהירות:</label>
+          <input id="rate" type="range" min="0.3" max="3" step="0.05" value="1" aria-describedby="rateVal" />
+          <span id="rateVal" class="hint" role="status" aria-live="polite">×1.00</span>
+
+
+        </div>
+      </section>
     </header>
 
-    <div id="panel">
-      <section class="card" id="browserCard">
+    <main id="panel">
+
+
+      <section class="card" id="browserCard" aria-labelledby="browserCardTitle">
         <div class="head">
-          <div>🗂 דפדוף • audio-v2-opus</div>
-          <button id="toggleBrowser" class="pill">מזער</button>
+          <h2 id="browserCardTitle"> דפדוף • audio-v2-opus</h2>
+
         </div>
+
         <div class="body" id="browser">
-          <div id="browserGrid">
+          <nav id="browserGrid" aria-label="דפדוף בתיקיות וקבצים">
             <div class="pane">
-              <h4>תיקיות</h4>
-              <div class="list" id="folders"></div>
+              <h3>תיקיות</h3>
+              <ul class="list" id="folders" role="list"></ul>
             </div>
             <div class="pane">
-              <h4>קבצים</h4>
-              <div class="list" id="files"></div>
+              <h3>קבצים</h3>
+              <ul class="list" id="files" role="list"></ul>
             </div>
-          </div>
+          </nav>
         </div>
       </section>
 
-      <section class="card" id="playerCard">
+
+      <div id="gutterR" class="gutter" role="separator" aria-orientation="vertical" tabindex="0"></div>
+
+
+      <section class="card" id="transcriptCard" aria-labelledby="transcriptCardTitle">
         <div class="head">
-          <div>נגן <button id="expandBrowser" class="pill hidden">📁 הרחב דפדוף</button></div>
-          <div id="status" class="hint">—</div>
-        </div>
-        <div class="body">
-          <audio id="player" controls crossorigin="anonymous"></audio>
-          <div class="controls">
-            <button class="pill" id="back5">⏪ 5s</button>
-            <button class="pill" id="fwd5">5s ⏩</button>
-            <button class="pill" id="back30">⏪ 30s</button>
-            <button class="pill" id="fwd30">30s ⏩</button>
-            <span style="flex:1"></span>
-            <label>מהירות: <input id="rate" type="range" min="0.3" max="3" step="0.05" value="1" /></label>
-            <span id="rateVal" class="hint">×1.00</span>
+          <h2 id="transcriptCardTitle">תמליל</h2>
+          <div role="group" aria-label="פקדי תמליל">
+            <button id="submitBtn" class="pill" type="button" aria-controls="transcript">⬆️ שמור תיקון</button>
+            <button id="fontMinus" class="pill" type="button" aria-controls="transcript" title="הקטן גופן">A−</button>
+            <button id="fontPlus" class="pill" type="button" aria-controls="transcript" title="הגדל גופן">A+</button>
           </div>
-          <div id="meta" class="hint" style="margin-top:.4rem"></div>
-          <div id="err" class="err"></div>
         </div>
+        <div id="transcript" class=" transcript" dir="auto" aria-label="תצוגת התמליל לעריכה"></div>
       </section>
 
-      <section class="card" id="transcriptCard">
+
+      <div id="gutterL" class="gutter" role="separator" aria-orientation="vertical" tabindex="0"></div>
+
+      <section class="card" id="diffCard" aria-labelledby="diffCardTitle">
         <div class="head">
-          <div>תמליל</div>
-          <div>
-            <button id="submitBtn" class="pill">⬆️ שמור תיקון</button>
-            <button id="fontMinus" class="pill">A−</button>
-            <button id="fontPlus" class="pill">A+</button>
-
-          </div>
+          <h2 id="diffCardTitle" class="diffCardTitle">
+            השוואה בין HF למצב הנוכחי
+          </h2>
         </div>
-        <div id="transcript" class="body transcript"></div>
+        <div id="diffBody" class="" dir="auto"></div>
       </section>
 
 
+      <!-- Modal -->
       <div id="modal" class="modal" aria-hidden="true">
-        <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="t">
+        <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="t" aria-describedby="tDesc" tabindex="-1">
           <h3 id="t">Hugging Face Token</h3>
+          <p id="tDesc" class="hint">האסימון נשמר מקומית בלבד ונשלח רק ל-huggingface.co.</p>
           <div class="p">
-            <div class="row"><input id="hfToken" type="password" placeholder="hf_XXXXXXXXXXXXXXXXXX" style="width:100%">
+            <div class="row">
+              <input id="hfToken" name="hfToken" type="password" placeholder="hf_XXXXXXXXXXXXXXXXXX" style="width:100%"
+                dir="ltr" inputmode="text" autocomplete="off" autocapitalize="off" spellcheck="false" translate="no" />
             </div>
-            <p class="hint">נשמר מקומית בלבד; נשלח רק ל-huggingface.co. קבצי אודיו נטענים כ-Blob כאשר נדרש.</p>
+            <p class="hint">קבצי אודיו נטענים כ-Blob כאשר נדרש.</p>
           </div>
-          <div class="actions"><button id="mClear">נקה</button><button id="mClose">סגור</button><button id="mSave"
-              class="primary">שמור</button></div>
+          <div class="actions">
+            <button id="mClear" type="button">נקה</button>
+            <button id="mClose" type="button">סגור</button>
+            <button id="mSave" class="primary" type="button">שמור</button>
+          </div>
         </div>
       </div>
-      <button id="scrollTopBtn" title="חזור למעלה">⬆️</button>
+
+      <button id="scrollTopBtn" type="button" title="חזור למעלה" aria-label="חזור למעלה">⬆️</button>
+
       <script src="https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako.min.js"></script>
       <!-- Load Supabase client -->
       <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 
-
       <script type="module">
+        import DiffMatchPatch from "https://esm.sh/diff-match-patch@1.0.5";
+        const DMP = new DiffMatchPatch();
+        const diffBody = document.getElementById('diffBody');
+
         (async () => {
+
           // ===== Supabase setup =====
           const { createClient } = supabase;
           const supabaseUrl = "https://xblbzxyyoptnfrlffigv.supabase.co";
@@ -437,12 +659,13 @@
 
           // ====== El refs
           const $ = (id) => document.getElementById(id);
-          const player = $('player'), tr = $('transcript'), status = $('status'), meta = $('meta'), err = $('err');
-          const autoScroll = $('autoScrollChk'), rate = $('rate'), rateVal = $('rateVal');
-          const settingsBtn = $('settingsBtn'), dlJsonBtn = $('dlJson'), dlVttBtn = $('dlVtt');
+          const err = $('err');
+          const player = $('player'), tr = $('transcript')
+          const rate = $('rate'), rateVal = $('rateVal');
+          const settingsBtn = $('settingsBtn'), dlVttBtn = $('dlVtt');
           const modal = $('modal'), hfTokenInput = $('hfToken'); const mSave = $('mSave'), mClose = $('mClose'), mClear = $('mClear');
           const foldersEl = $('folders'), filesEl = $('files');
-          const browserCard = $('browserCard'), toggleBrowser = $('toggleBrowser'), expandBrowser = $('expandBrowser'), panel = $('panel');
+          const browserCard = $('browserCard');
           const transcriptEl = $('transcript');
           const fontMinus = $('fontMinus');
           const fontPlus = $('fontPlus');
@@ -454,6 +677,8 @@
           let editBox = null; // contentEditable div
           let currentFileNode = null;
           let correctionsCache = new Set();
+          let lastLoad = { controller: null, token: 0 };
+          let hfBaselineText = '';   // טקסט המקור מ-HF לצורך diff
 
           // Baseline/current token streams (flattened, include \n tokens)
           let baselineTokens = []; // immutable
@@ -476,11 +701,10 @@
           const t2 = t => { if (!Number.isFinite(t)) return '—'; const s = ('0' + Math.floor(t % 60)).slice(-2), m = ('0' + Math.floor(t / 60 % 60)).slice(-2), h = Math.floor(t / 3600); return h ? `${h}:${m}:${s}` : `${m}:${s}` };
           const fetchAuth = (u, o = {}) => { const h = new Headers(o.headers || {}); if (!h.has('Accept')) h.set('Accept', 'application/json'); if (getTok() && isHf(u)) h.set('Authorization', 'Bearer ' + getTok()); return fetch(u, { ...o, headers: h, mode: 'cors', redirect: 'follow' }); };
           const clearTr = () => { tr.innerHTML = ''; wordEls = []; starts = []; ends = []; lastIdx = -1 };
-          const showErr = m => { err.textContent = m || '' };
           const deepCopy = x => JSON.parse(JSON.stringify(x));
 
-          await loadAllCorrections();
 
+          await loadAllCorrections();
 
           function tokenize(text) {
             const out = [];
@@ -508,19 +732,6 @@
           }
 
           const wordsToText = (words) => words.filter(w => w.state !== "del").map(w => w.word).join('');
-
-          // ====== Diff (lightweight LCS on token arrays)
-          function diffOps(A, B) { // arrays of strings
-            const m = A.length, n = B.length;
-            const dp = Array(m + 1).fill(null).map(() => Array(n + 1).fill(0));
-            for (let i = m - 1; i >= 0; i--) for (let j = n - 1; j >= 0; j--) dp[i][j] = (A[i] === B[j]) ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
-            let i = 0, j = 0, ops = [], cur = null; const push = t => { if (cur && cur.type === t) cur.count++; else { if (cur) ops.push(cur); cur = { type: t, count: 1 }; } };
-            while (i < m && j < n) { if (A[i] === B[j]) { push('equal'); i++; j++; } else if (dp[i + 1][j] >= dp[i][j + 1]) { push('delete'); i++; } else { push('insert'); j++; } }
-            while (i < m) { push('delete'); i++; }
-            while (j < n) { push('insert'); j++; }
-            if (cur) ops.push(cur); return ops;
-          }
-
 
 
           // Use normalized baseline so LCS aligns unchanged tokens;
@@ -558,6 +769,7 @@
             while (j < n) { out.push({ word: B[j++], start: NaN, end: NaN, state: 'ins' }); }
 
             assignTimesFromAnchors(out); // only modifies 'ins'
+            repairChronology(out);
             return out;
           }
 
@@ -602,24 +814,27 @@
             return out;
           }
 
+          // Drop-in replacement
           function assignTimesFromAnchors(arr) {
-            const isWS = (s) => /^\s$/u.test(s); // single whitespace char because of tokenize()
+            const EPS = 1e-3;           // 1 ms
+            const MIN_WORD_DUR = 0.02;  // 20 ms
+            const isWS = s => /^\s$/u.test(s);
 
-            const isWordKeep = (w) =>
+            const isWordKeep = w =>
               w.state === 'keep' && !isWS(w.word) &&
               Number.isFinite(w.start) && Number.isFinite(w.end) && w.end > w.start;
 
-            const isAnyKeep = (w) =>
+            const isAnyKeep = w =>
               w.state === 'keep' &&
               Number.isFinite(w.start) && Number.isFinite(w.end);
 
             function leftAnchor(i) {
               for (let k = i - 1; k >= 0; k--) {
-                if (arr[k].state === 'keep' && arr[k].word === '\n') return null; // barrier
+                if (arr[k].state === 'keep' && arr[k].word === '\n') return null;
                 if (isWordKeep(arr[k])) return arr[k];
               }
               for (let k = i - 1; k >= 0; k--) {
-                if (arr[k].state === 'keep' && arr[k].word === '\n') return null; // barrier
+                if (arr[k].state === 'keep' && arr[k].word === '\n') return null;
                 if (isAnyKeep(arr[k])) return arr[k];
               }
               return null;
@@ -627,11 +842,11 @@
 
             function rightAnchor(i) {
               for (let k = i + 1; k < arr.length; k++) {
-                if (arr[k].state === 'keep' && arr[k].word === '\n') return null; // barrier
+                if (arr[k].state === 'keep' && arr[k].word === '\n') return null;
                 if (isWordKeep(arr[k])) return arr[k];
               }
               for (let k = i + 1; k < arr.length; k++) {
-                if (arr[k].state === 'keep' && arr[k].word === '\n') return null; // barrier
+                if (arr[k].state === 'keep' && arr[k].word === '\n') return null;
                 if (isAnyKeep(arr[k])) return arr[k];
               }
               return null;
@@ -640,76 +855,152 @@
             let i = 0;
             while (i < arr.length) {
               if (arr[i].state !== 'ins') { i++; continue; }
-
-              // gather inserted run [i, j)
               let j = i; while (j < arr.length && arr[j].state === 'ins') j++;
 
               const L = leftAnchor(i), R = rightAnchor(j - 1);
               const slice = arr.slice(i, j);
-
-              // Count only non-WS for spacing
-              const wordIdxs = slice.map((t, ix) => (!isWS(t.word) ? ix : -1)).filter(ix => ix >= 0);
+              const wordIdxs = slice.map((t, ix) => (/^\s$/u.test(t.word) ? -1 : ix)).filter(ix => ix >= 0);
               const wordCount = wordIdxs.length;
 
-              // Compute window
               let winStart, winEnd;
-              if (L && R && R.start > L.end) {
-                winStart = L.end; winEnd = R.start;
-              } else if (L) {
-                winStart = L.end; winEnd = L.end + Math.max(0.12 * Math.max(1, wordCount), 0.12);
-              } else if (R) {
-                winEnd = R.start; winStart = R.start - Math.max(0.12 * Math.max(1, wordCount), 0.12);
-              } else {
-                winStart = 0; winEnd = 0.12 * Math.max(1, wordCount);
-              }
-              if (winEnd <= winStart) winEnd = winStart + Math.max(0.12 * Math.max(1, wordCount), 0.12);
-              // Assign times:
+              const winLenFor = n => Math.max(0.12 * Math.max(1, n), 0.12);
+
+              if (L && R && R.start > L.end) { winStart = L.end; winEnd = R.start; }
+              else if (L) { winStart = L.end; winEnd = L.end + winLenFor(wordCount); }
+              else if (R) { winEnd = R.start; winStart = R.start - winLenFor(wordCount); }
+              else { winStart = 0; winEnd = winLenFor(wordCount); }
+
+              if (winEnd <= winStart) winEnd = winStart + winLenFor(wordCount);
+
               if (wordCount > 0) {
                 const step = (winEnd - winStart) / (wordCount + 1);
                 let nthWord = 0;
+                let prevAssigned = Number.isFinite(L?.end) ? L.end : -Infinity;
+
                 for (let k = 0; k < slice.length; k++) {
                   const g = arr[i + k];
+
                   if (isWS(g.word)) {
-                    // zero-duration anchor along the window
-                    const frac = (k + 1) / (slice.length + 1);
-                    const anchor = winStart + (winEnd - winStart) * frac;
+                    let anchor = winStart + (winEnd - winStart) * ((k + 1) / (slice.length + 1));
+                    anchor = Math.max(anchor, prevAssigned + EPS, winStart + EPS);
+                    if (R) anchor = Math.min(anchor, R.start - EPS);
                     g.start = g.end = anchor;
-                  } else {
-                    nthWord++;
-                    const s = winStart + step * nthWord;
-                    g.start = Math.max(0, s - step * 0.45);
-                    g.end = g.start + Math.max(0.02, step * 0.9);
+                    prevAssigned = g.start;
+                    continue;
                   }
+
+                  nthWord++;
+                  const center = winStart + step * nthWord;
+                  let s = center - step * 0.45;                          // preserve your spacing feel
+                  s = Math.max(s, prevAssigned + EPS, winStart + EPS);
+                  if (R) s = Math.min(s, R.start - EPS);
+                  let e = s + Math.max(MIN_WORD_DUR, step * 0.9);
+                  if (R && e > R.start - EPS) e = Math.max(s + MIN_WORD_DUR, R.start - EPS);
+
+                  g.start = s; g.end = e;
+                  prevAssigned = g.start;
                 }
               } else {
-                // only whitespace inserted → anchor all at window mid (zero-duration)
-                const mid = winStart + (winEnd - winStart) / 2;
+                // Only whitespace → anchor at mid (clamped)
+                let a = winStart + (winEnd - winStart) / 2;
+                if (L) a = Math.max(a, L.end + EPS);
+                if (R) a = Math.min(a, R.start - EPS);
                 for (let k = 0; k < slice.length; k++) {
                   const g = arr[i + k];
-                  g.start = g.end = mid;
+                  g.start = g.end = a;
                 }
               }
 
+              // Local monotonicity inside the slice
+              (function monotonicize(leftBound) {
+                let last = Number.isFinite(leftBound) ? leftBound : -Infinity;
+                for (let k = i; k < j; k++) {
+                  const g = arr[k], ws = isWS(g.word);
+                  if (!Number.isFinite(g.start)) g.start = last + EPS;
+                  if (g.start < last - EPS) g.start = last + EPS;
+                  if (!Number.isFinite(g.end)) g.end = g.start + (ws ? 0 : MIN_WORD_DUR);
+                  if (g.end < g.start) g.end = g.start + (ws ? 0 : MIN_WORD_DUR);
+                  last = g.start;
+                }
+              })(L?.end);
+
               i = j;
+            }
+
+            // Global sweep: if anything (including kept WS) still steps back, nudge forward.
+            let prev = -Infinity;
+            for (let k = 0; k < arr.length; k++) {
+              const t = arr[k];
+              if (t.state === 'del' || t.word === '\n') continue;
+              const ws = isWS(t.word);
+
+              if (!Number.isFinite(t.start)) t.start = prev + EPS;
+              if (!Number.isFinite(t.end)) t.end = t.start + (ws ? 0 : MIN_WORD_DUR);
+
+              if (t.start < prev - EPS) {
+                // we will adjust inserted tokens OR any whitespace; also fix obviously-bad kept words
+                if (t.state === 'ins' || ws || t.end < prev) {
+                  t.start = prev + EPS;
+                  if (t.end < t.start) t.end = t.start + (ws ? 0 : MIN_WORD_DUR);
+                }
+              }
+              prev = Math.max(prev, t.start);
+            }
+          }
+          function repairChronology(tokens) {
+            const EPS = 1e-3, MIN_WORD_DUR = 0.02;
+            const isWS = s => /^\s$/u.test(s);
+
+            let prev = -Infinity;
+            for (let i = 0; i < tokens.length; i++) {
+              const t = tokens[i];
+              if (t.state === 'del' || t.word === '\n') continue;
+
+              const ws = isWS(t.word);
+              if (!Number.isFinite(t.start)) t.start = prev + EPS;
+              if (!Number.isFinite(t.end)) t.end = t.start + (ws ? 0 : MIN_WORD_DUR);
+
+              if (t.start < prev - EPS) {
+                // As a last resort, nudge any offender forward (kept or inserted).
+                t.start = prev + EPS;
+                if (t.end < t.start) t.end = t.start + (ws ? 0 : MIN_WORD_DUR);
+              }
+              prev = Math.max(prev, t.start);
             }
           }
 
-
-          // ====== Render
           function render() {
             if (editingFull.active) return;
             clearTr();
             const f = document.createDocumentFragment();
+
             currentTokens.forEach((w, ti) => {
-              if (w.word === '\n') { f.appendChild(document.createTextNode('\n')); return; }
-              const sp = document.createElement('span'); sp.className = 'word'; sp.textContent = w.word; sp.dataset.start = w.start; sp.dataset.end = w.end; sp.dataset.ti = ti;
-              if (w.state === 'ins') sp.classList.add('added-lite');
-              if (w.state === 'del') sp.classList.add('deleted');
+              // ⛔️ Don't render deleted tokens at all
+              if (w.state === 'del') return;
+
+              if (w.word === '\n') {
+                f.appendChild(document.createTextNode('\n'));
+                return;
+              }
+
+              const sp = document.createElement('span');
+              sp.className = 'word';            // keep transcript clean: no diff classes
+              sp.textContent = w.word;
+              sp.dataset.start = w.start;
+              sp.dataset.end = w.end;
+              sp.dataset.ti = ti;
+
               f.appendChild(sp);
-              if (w.state !== 'del') { wordEls.push(sp); starts.push(w.start); ends.push(w.end); }
+
+              // only non-deleted words are navigable/highlightable
+              wordEls.push(sp);
+              starts.push(w.start);
+              ends.push(w.end);
             });
+
             tr.appendChild(f);
           }
+
 
           // ====== Word interactions (Event Delegation)
           tr.onclick = e => {
@@ -764,7 +1055,7 @@
                 e.preventDefault(); cancelFullEdit();
               }
             });
-
+            editBox.addEventListener('input', renderDiff);
             // One-time global: left-click outside transcript commits and resumes
             if (!ensureEditUI._outsideBound) {
               document.addEventListener('mousedown', (e) => {
@@ -813,6 +1104,7 @@
               editingFull = { active: false, resume: false, original: '', caret: 0 };
               editBox = null;
               render();
+              renderDiff();
               if (resume && !player.ended) { try { player.play(); } catch { } }
               return;
             }
@@ -827,6 +1119,7 @@
             editingFull = { active: false, resume: false, original: '', caret: 0 };
             editBox = null;
             render();
+            renderDiff();
             if (resume && !player.ended) { try { player.play(); } catch { } }
           }
 
@@ -834,6 +1127,7 @@
           function cancelFullEdit() {
             if (!editingFull.active) return; const resume = editingFull.resume;
             editingFull = { active: false, resume: false, original: '', caret: 0 }; editBox = null; render();
+            renderDiff();
             if (resume && !player.ended) try { player.play() } catch { };
           }
 
@@ -851,6 +1145,7 @@
                 data = tokensToData(currentTokens);
                 render();
                 if (editBox) editBox.textContent = getFullText();
+                renderDiff(); // <-- add this
               }
             } else if (isRedo) {
               e.preventDefault();
@@ -859,6 +1154,7 @@
                 currentTokens = redoStack.pop();
                 data = tokensToData(currentTokens);
                 render();
+                renderDiff();
                 if (editBox) editBox.textContent = getFullText();
               }
             }
@@ -954,7 +1250,6 @@
             }
           }
           // ====== Select folder and render files ======
-          // ====== Select folder and render files ======
           async function selectFolder(folder, node) {
             // highlight active folder in sidebar
             [...foldersEl.children].forEach(el =>
@@ -985,12 +1280,11 @@
                 return;
               }
 
-              // render the file buttons
               filesEl.innerHTML = files
-                .map(
-                  f =>
-                    `<button class="item" data-folder="${folder}" data-file="${f}">${f}</button>`
-                )
+                .map(f => {
+                  const displayName = f.replace(/\.opus$/i, ""); // strip extension
+                  return `<button class="item" data-folder="${folder}" data-file="${f}">${displayName}</button>`;
+                })
                 .join("");
 
               // ===== crosscheck corrections from cache =====
@@ -1005,6 +1299,198 @@
           }
 
 
+          function escapeHtml(text) {
+            return String(text).replace(/[&<>"']/g, c => (
+              { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+            ));
+          }
+
+          // Current plain text for diff: if editing, use live content; else use tokens
+          function getCurrentPlainText() {
+            if (editBox && editingFull.active) {
+              return (editBox.innerText || '').replace(/\r/g, '');
+            }
+            // wordsToText already exists in your code
+            return wordsToText(currentTokens.filter(t => t.state !== 'del'));
+          }
+
+          function renderDiff() {
+            if (!diffBody) return;
+
+            const base = hfBaselineText || '';
+            const cur = getCurrentPlainText();
+
+            if (!base) {
+              diffBody.textContent = cur;
+              return;
+            }
+
+            const diffs = DMP.diff_main(base, cur);
+            DMP.diff_cleanupSemantic(diffs);
+
+            diffBody.innerHTML = diffs.map(([op, data]) => {
+              if (op === 1) return `<span class="diff-insert">${escapeHtml(data)}</span>`;
+              if (op === -1) return `<span class="diff-delete">${escapeHtml(data)}</span>`;
+              return `<span class="diff-equal">${escapeHtml(data)}</span>`;
+            }).join('');
+          }
+
+
+          (function setupGutters() {
+            const gutL = document.getElementById('gutterL');       // between transcript & diff
+            const gutR = document.getElementById('gutterR');       // between browser & transcript
+            const panelEl = document.getElementById('panel');
+            const diffCard = document.getElementById('diffCard');
+            const browserCard = document.getElementById('browserCard');
+
+            if (!gutL || !gutR || !panelEl || !diffCard || !browserCard) return;
+
+            const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+
+            let dragging = null;
+
+            function onMove(e) {
+              if (!dragging) return;
+              const x = e.clientX;
+
+              if (dragging.which === 'L') {
+                // Resize DIFF width
+                let newW;
+                if (dragging.diffIsLeftOfGutter) {
+                  // diff column is to the LEFT of the gutter → width grows from panel LEFT
+                  newW = clamp(x - dragging.panelRect.left, 7, 640);
+                } else {
+                  // diff column is to the RIGHT of the gutter → width grows from panel RIGHT
+                  newW = clamp(dragging.panelRect.right - x, 7, 640);
+                }
+                panelEl.style.setProperty('--w-diff', newW + 'px');
+              } else if (dragging.which === 'R') {
+                // Resize BROWSER width
+                let newW;
+                if (dragging.browserIsRightOfGutter) {
+                  // browser is to the RIGHT of the gutter (typical LTR order)
+                  newW = clamp(dragging.panelRect.right - x, 7, 1680);
+                } else {
+                  // browser is to the LEFT of the gutter (RTL visual order)
+                  newW = clamp(x - dragging.panelRect.left, 7, 1680);
+                }
+                panelEl.style.setProperty('--w-nav', newW + 'px');
+              }
+            }
+
+            function stop() {
+              if (!dragging) return;
+              // remove text-select suppression
+              document.body.style.userSelect = dragging.prevUserSelect || '';
+              dragging = null;
+              window.removeEventListener('mousemove', onMove);
+              window.removeEventListener('mouseup', stop);
+            }
+
+            function start(which, e) {
+              const panelRect = panelEl.getBoundingClientRect();
+
+              // Figure out where the controlled column is **relative to the gutter** at drag start
+              if (which === 'L') {
+                const gutRect = gutL.getBoundingClientRect();
+                const diffRect = diffCard.getBoundingClientRect();
+                dragging = {
+                  which,
+                  panelRect,
+                  prevUserSelect: document.body.style.userSelect,
+                  // is the diff column visually to the left of the gutter?
+                  diffIsLeftOfGutter: diffRect.left < gutRect.left
+                };
+              } else {
+                const gutRect = gutR.getBoundingClientRect();
+                const brRect = browserCard.getBoundingClientRect();
+                dragging = {
+                  which,
+                  panelRect,
+                  prevUserSelect: document.body.style.userSelect,
+                  // is the browser column visually to the right of the gutter?
+                  browserIsRightOfGutter: brRect.right > gutRect.right
+                };
+              }
+
+              // suppress text selection while dragging
+              document.body.style.userSelect = 'none';
+
+              window.addEventListener('mousemove', onMove);
+              window.addEventListener('mouseup', stop);
+            }
+
+            gutL.addEventListener('mousedown', (e) => { e.preventDefault(); start('L', e); });
+            gutR.addEventListener('mousedown', (e) => { e.preventDefault(); start('R', e); });
+
+            // Keyboard nudges still work the same way
+            function nudge(which, dx) {
+              const cs = getComputedStyle(panelEl);
+              const prop = which === 'L' ? '--w-diff' : '--w-nav';
+              const cur = parseFloat(cs.getPropertyValue(prop)) || (which === 'L' ? 360 : 380);
+              const next = (which === 'L')
+                ? clamp(cur + dx, 220, 640)
+                : clamp(cur + dx, 240, 680);
+              panelEl.style.setProperty(prop, next + 'px');
+            }
+            gutL.addEventListener('keydown', (e) => {
+              if (e.key === 'ArrowLeft') nudge('L', -10);
+              if (e.key === 'ArrowRight') nudge('L', 10);
+            });
+            gutR.addEventListener('keydown', (e) => {
+              if (e.key === 'ArrowLeft') nudge('R', -10);
+              if (e.key === 'ArrowRight') nudge('R', 10);
+            });
+          })();
+
+
+
+          function validateChronology(tokens) {
+            const EPS = 1e-3;
+            const issues = [];
+            let prevStart = -Infinity;
+
+            tokens.forEach((t, i) => {
+              if (t.state === 'del' || t.word === '\n') return;
+
+              const s = t.start, e = t.end;
+              const label = `${i}:${JSON.stringify(t.word)}`;
+
+              if (!Number.isFinite(s) || !Number.isFinite(e)) {
+                issues.push(`NaN/Non-finite time at ${label} start=${s} end=${e}`);
+                return;
+              }
+              if (e < s - EPS) issues.push(`end<start at ${label} (${s}→${e})`);
+              if (s < prevStart - EPS) issues.push(`non-monotonic start at ${label} (${s} < prev ${prevStart})`);
+
+              prevStart = Math.max(prevStart, s);
+            });
+
+            if (issues.length) {
+              console.error('⛔ Token chronology issues:\n' + issues.join('\n'));
+              alert(
+                'בעיית כרונולוגיה בזמנים:\n' +
+                issues.slice(0, 30).join('\n') +
+                (issues.length > 30 ? `\n…ועוד ${issues.length - 30}` : '')
+              );
+              return false;
+            }
+            return true;
+          }
+
+          (function setupScrollSync() {
+            const trBody = document.getElementById('transcript'); // זה כבר .body
+            if (!trBody || !diffBody) return;
+
+            trBody.addEventListener('scroll', () => {
+              const src = trBody;
+              const dst = diffBody;
+              const srcMax = Math.max(1, src.scrollHeight - src.clientHeight);
+              const dstMax = Math.max(1, dst.scrollHeight - dst.clientHeight);
+              const p = src.scrollTop / srcMax;
+              dst.scrollTop = p * dstMax;
+            }, { passive: true });
+          })();
 
           filesEl.onclick = e => { const item = e.target.closest('.item[data-file]'); if (item) selectEpisode(item.dataset.folder, item.dataset.file, item); };
           function selectEpisode(folder, file, node) { if (node) { if (currentFileNode) currentFileNode.classList.remove('active'); currentFileNode = node; currentFileNode.classList.add('active'); } const { audioPath, trPath } = normPaths(folder, file); load(audioPath, trPath); }
@@ -1013,20 +1499,25 @@
           // ====== Load (audio + transcript) ======
           async function load(audioPath, trPath) {
             if (currentFileNode) currentFileNode.classList.add("loading");
+
+            // בטל טעינה קודמת, והכן זיהוי חד-חד ערכי לטעינה הנוכחית
+            const token = ++lastLoad.token;
+            lastLoad.controller?.abort();
+            const ac = new AbortController();
+            lastLoad.controller = ac;
+
             try {
-              showErr("");
               clearTr();
-              status.textContent = "טוען…";
               undoStack = [];
               redoStack = [];
 
-              // ===== Try Supabase first =====
+              // --- 1) ננסה להביא תיקון מ-Supabase
               let corrected = null;
               try {
                 const { data, error } = await supa
                   .from("corrections")
                   .select("json_data")
-                  .eq("file_path", audioPath) // using audioPath as the unique key
+                  .eq("file_path", audioPath)
                   .maybeSingle();
 
                 if (error) {
@@ -1034,36 +1525,25 @@
                 } else if (data) {
                   corrected = data.json_data;
                   console.log("✅ Loaded corrected JSON from Supabase");
-
-                  // ✅ mark this file green immediately
                   markFile(audioPath, true);
                 }
               } catch (dbErr) {
                 console.warn("Supabase query failed:", dbErr);
               }
+              if (token !== lastLoad.token) return; // טעינה בוטלה/התיישנה
 
-              if (corrected) {
-                // Use corrected transcript
-                data = normData(corrected);
-                baselineTokens = flattenToTokens(data);
-                currentTokens = baselineTokens.map(t => ({
-                  word: t.word,
-                  start: t.start,
-                  end: t.end,
-                  state: "keep"
-                }));
-                data = tokensToData(currentTokens);
-                render();
-              } else {
-                // ===== Fallback: Hugging Face transcript =====
+              // --- 2) תמיד להביא HF transcript לצורך diff מול המקור
+              // (גם אם כבר יש 'corrected')
+              let hfRaw = null;
+              try {
                 const trUrl = transUrl(trPath);
-                let r = await fetchAuth(trUrl);
+                let r = await fetchAuth(trUrl, { signal: ac.signal });
                 if (r.status === 401 && !getTok())
                   throw new Error("401: דרוש hf_ token לתמליל");
                 if (!r.ok) throw new Error("שגיאת רשת (" + r.status + ") בתמליל");
 
-                let txt,
-                  ct = (r.headers.get("content-type") || "").toLowerCase();
+                let txt;
+                const ct = (r.headers.get("content-type") || "").toLowerCase();
                 if (ct.includes("application/gzip") || trPath.endsWith(".gz")) {
                   const ab = await r.arrayBuffer();
                   txt = new TextDecoder("utf-8").decode(
@@ -1072,27 +1552,51 @@
                 } else {
                   txt = await r.text();
                 }
+                hfRaw = JSON.parse(txt);
+              } catch (e) {
+                // אם נכשלנו ב-HF (למשל ללא טוקן) – נמשיך בלי diff, אבל נדווח
+                console.warn("HF transcript fetch failed (diff baseline):", e);
+              }
+              if (token !== lastLoad.token) return;
 
-                const raw = JSON.parse(txt);
-                data = normData(raw);
-                baselineTokens = flattenToTokens(data);
-                currentTokens = baselineTokens.map(t => ({
-                  word: t.word,
-                  start: t.start,
-                  end: t.end,
-                  state: "keep"
+              // --- 3) נרמל את ה-HF לטקסט baseline ל-diff (אם קיים)
+              if (hfRaw) {
+                const hfNorm = normData(hfRaw);
+                const hfTokens = flattenToTokens(hfNorm).map(t => ({
+                  word: t.word, start: t.start, end: t.end, state: "keep"
                 }));
-                data = tokensToData(currentTokens);
-                render();
+                hfBaselineText = wordsToText(hfTokens);
+              } else {
+                hfBaselineText = '';
+              }
 
-                // ✅ mark red if no correction found
+              // --- 4) קבע את הדאטה הפעיל לתצוגה (תיקון אם יש, אחרת HF)
+              if (corrected) {
+                data = normData(corrected);
+              } else {
+                // לא היה תיקון → נטען מה-HF שהבאנו בשלב 2
+                if (!hfRaw) throw new Error("שגיאה: כנראה לא הכנסת טוקן. לחץ על גלגל השיניים והכנס טוקן.");
+                data = normData(hfRaw);
                 markFile(audioPath, false);
               }
 
-              // ===== Audio load =====
+              // tokens לרינדור/עריכה
+              baselineTokens = flattenToTokens(data);
+              currentTokens = baselineTokens.map(t => ({
+                word: t.word, start: t.start, end: t.end, state: "keep"
+              }));
+              repairChronology(currentTokens);
+
+              data = tokensToData(currentTokens);
+              render();
+              if (typeof renderDiff === 'function') renderDiff(); // אם הוגדר (ראה סעיף diff)
+
+              if (token !== lastLoad.token) return;
+
+              // --- 5) טעינת האודיו
               const aUrl = opusUrl(audioPath);
               if (getTok() && isHf(aUrl)) {
-                const ar = await fetchAuth(aUrl);
+                const ar = await fetchAuth(aUrl, { signal: ac.signal });
                 if (ar.status === 401)
                   throw new Error("401: דרוש hf_ token לאודיו");
                 if (!ar.ok) throw new Error("שגיאה (" + ar.status + ") באודיו");
@@ -1103,48 +1607,79 @@
               } else {
                 player.src = aUrl;
               }
+              if (token !== lastLoad.token) return;
 
+              // --- 6) מטא/מהירות/התחלה
               player.playbackRate = parseFloat(rate.value) || 1;
               const nice = (() => {
-                try {
-                  return decodeURIComponent(
-                    new URL(aUrl).pathname.split("/").pop()
-                  );
-                } catch {
-                  return aUrl;
-                }
+                try { return decodeURIComponent(new URL(aUrl).pathname.split("/").pop()); }
+                catch { return aUrl; }
               })();
-              meta.innerHTML = `קובץ: <b>${nice}</b> · <a href="${aUrl}" target="_blank" rel="noopener">קישור</a>`;
-              status.textContent = "מוכן";
               player.currentTime = 0.01;
+
             } catch (e) {
-              status.textContent = "שגיאה";
-              showErr(e.message || e);
+              if (e.name === 'AbortError') return; // בוטל – אין מה לדווח
               alert(e.message || e);
             } finally {
               if (currentFileNode) currentFileNode.classList.remove("loading");
             }
           }
+
+
+
+
+
           // ====== Normalization helper (unchanged core)
+
+
           const normData = raw => { const d = JSON.parse(JSON.stringify(raw || {})); d.text = d.text || ''; d.segments = Array.isArray(d.segments) ? d.segments : []; d.segments.forEach(s => { if (!Array.isArray(s.words) || !s.words.length) { s.words = [{ word: s.text || ' ', start: +s.start || 0, end: +s.end || (+s.start || 0) + .5 }] } else s.words.forEach(w => { w.start = +w.start || 0; w.end = +w.end || w.start + .25; w.word = String(w.word || '') }) }); return d };
 
           // ====== Exports (use currentTokens, preserve whitespace, ignore deleted tokens)
-          const vttTime = t => { const h = ('0' + Math.floor(t / 3600)).slice(-2), m = ('0' + Math.floor(t % 3600 / 60)).slice(-2), s = ('0' + Math.floor(t % 60)).slice(-2), ms = ('00' + Math.floor((t % 1) * 1000)).slice(-3); return `${h}:${m}:${s}.${ms}` };
-          const buildVtt = () => {
+          const vttTime = t => {
+            const h = ('0' + Math.floor(t / 3600)).slice(-2),
+              m = ('0' + Math.floor(t % 3600 / 60)).slice(-2),
+              s = ('0' + Math.floor(t % 60)).slice(-2),
+              ms = ('00' + Math.floor((t % 1) * 1000)).slice(-3);
+            return `${h}:${m}:${s}.${ms}`;
+          };
+
+          function buildVtt() {
+            // נרצה להתריע גם כאן אם יש בעיות
+            if (!validateChronology(currentTokens)) {
+              // אם לא כרונולוגי – כבר הופיע alert. אפשר לעצור או להמשיך.
+              // נעצור כדי לא להפיק VTT שגוי:
+              throw new Error('הטוקנים אינם כרונולוגיים – לא ניתן להפיק VTT');
+            }
+
             let out = 'WEBVTT\n\n';
             let cueWords = [], cueStart = null, cueEnd = null, cueIndex = 1;
-            function flush() { if (!cueWords.length) return; out += `${cueIndex++}\n${vttTime(cueStart)} --> ${vttTime(cueEnd)}\n${cueWords.join('')}\n\n`; cueWords = []; cueStart = null; cueEnd = null; }
-            currentTokens.forEach(t => {
-              if (t.state === 'del') return; // skip deleted
-              if (t.word === '\n') { flush(); return; }
+            const problems = [];
+
+            function flush() {
+              if (!cueWords.length) return;
+              if (!(Number.isFinite(cueStart) && Number.isFinite(cueEnd) && cueEnd > cueStart)) {
+                problems.push(`Invalid cue #${cueIndex}: start=${cueStart}, end=${cueEnd}, text="${cueWords.join('')}"`);
+              } else {
+                out += `${cueIndex++}\n${vttTime(cueStart)} --> ${vttTime(cueEnd)}\n${cueWords.join('')}\n\n`;
+              }
+              cueWords = []; cueStart = null; cueEnd = null;
+            }
+
+            for (const t of currentTokens) {
+              if (t.state === 'del') continue;
+              if (t.word === '\n') { flush(); continue; }
               cueWords.push(t.word);
               if (Number.isFinite(t.start)) cueStart = (cueStart == null) ? t.start : Math.min(cueStart, t.start);
               if (Number.isFinite(t.end)) cueEnd = (cueEnd == null) ? t.end : Math.max(cueEnd, t.end);
-            });
+            }
             flush();
-            return out;
-          };
 
+            if (problems.length) {
+              console.error('⛔ VTT cue issues:\n' + problems.join('\n'));
+              alert('בעיות ביצירת VTT:\n' + problems.slice(0, 30).join('\n') + (problems.length > 30 ? `\n…ועוד ${problems.length - 30}` : ''));
+            }
+            return out;
+          }
           const buildJson = () => {
             const segs = [];
             let words = [];
@@ -1190,38 +1725,61 @@
 
           // ====== Playback UI
           const idxAt = t => { let lo = 0, hi = starts.length - 1, ans = -1; while (lo <= hi) { const m = (lo + hi) >> 1; if (starts[m] <= t) { ans = m; lo = m + 1 } else hi = m - 1 } if (ans >= 0 && t > (ends[ans] || starts[ans] + .25) && ans + 1 < starts.length && starts[ans + 1] <= t) ans++; return ans };
-          const tick = () => { const t = player.currentTime, i = idxAt(t); if (i !== lastIdx) { if (lastIdx >= 0 && wordEls[lastIdx]) wordEls[lastIdx].classList.remove('active'); if (i >= 0 && wordEls[i]) { const el = wordEls[i]; el.classList.add('active'); if (autoScroll.checked) { const b = el.getBoundingClientRect(), c = tr.getBoundingClientRect(); if (b.top < c.top + 40 || b.bottom > c.bottom - 40) el.scrollIntoView({ behavior: 'smooth', block: 'center' }) } } lastIdx = i } status.textContent = `${t2(t)} / ${t2(player.duration || 0)}` };
+          const tick = () => { const t = player.currentTime, i = idxAt(t); if (i !== lastIdx) { if (lastIdx >= 0 && wordEls[lastIdx]) wordEls[lastIdx].classList.remove('active'); if (i >= 0 && wordEls[i]) { const el = wordEls[i]; el.classList.add('active'); } lastIdx = i } };
           player.addEventListener('timeupdate', tick);
           player.addEventListener('ratechange', () => { rate.value = String(player.playbackRate); rateVal.textContent = '×' + player.playbackRate.toFixed(2) });
           rate.oninput = () => { player.playbackRate = parseFloat(rate.value) || 1; rateVal.textContent = '×' + player.playbackRate.toFixed(2) };
-          const by = s => () => player.currentTime = Math.max(0, Math.min(player.duration || 0, player.currentTime + s));
-          $('back5').onclick = by(-5); $('fwd5').onclick = by(+5); $('back30').onclick = by(-30); $('fwd30').onclick = by(+30);
 
           // ====== Settings modal
           const openM = () => { modal.classList.add('open'); hfTokenInput.value = getTok(); };
           const closeM = () => { modal.classList.remove('open'); };
           settingsBtn.onclick = openM; mClose.onclick = closeM; mSave.onclick = () => { setTok(hfTokenInput.value.trim()); closeM() }; mClear.onclick = () => { setTok(''); hfTokenInput.value = '' }; modal.addEventListener('click', e => { if (e.target === modal) closeM() });
 
-          // ====== Browser collapse toggle
-          function setCollapsed(on) { browserCard.classList.toggle('collapsed', on); panel.classList.toggle('browser-collapsed', on); toggleBrowser.textContent = on ? 'הרחב' : 'מזער'; expandBrowser.classList.toggle('hidden', !on); }
-          toggleBrowser.onclick = () => setCollapsed(!browserCard.classList.contains('collapsed'));
-          expandBrowser.onclick = () => setCollapsed(false);
 
-          // ====== Buttons
-          dlJsonBtn.onclick = () => dl((document.title || 'transcript') + '.json', buildJson(), 'application/json');
+          // ====== ButtonsZ;
           dlVttBtn.onclick = () => dl((document.title || 'transcript') + '.vtt', buildVtt(), 'text/vtt');
 
           // ====== Init
-          (async () => { try { await loadFolders(); } catch (e) { showErr('שגיאה בדפדוף: ' + (e.message || e)); } })();
+          (async () => { try { await loadFolders(); } catch (e) { console.log('שגיאה בדפדוף: ' + (e.message || e)); } })();
+          // ---- Text size control (shared for transcript + diff) ----
+          const root = document.documentElement;
 
-          let fontSize = 1.05; // starting rem (matches your CSS)
+          // Try to read an existing --text-size; fall back to computed transcript size
+          function readInitialTextSizeRem() {
+            const varVal = getComputedStyle(root).getPropertyValue('--text-size').trim();
+            if (varVal.endsWith('rem')) return parseFloat(varVal);
+            if (varVal.endsWith('px')) {
+              const rootPx = parseFloat(getComputedStyle(root).fontSize) || 16;
+              return parseFloat(varVal) / rootPx;
+            }
+            // fallback: derive from transcript
+            const rootPx = parseFloat(getComputedStyle(root).fontSize) || 16;
+            const trPx = parseFloat(getComputedStyle(transcriptEl).fontSize) || (1.10 * rootPx);
+            return trPx / rootPx;
+          }
+
+          let fontSizeRem = readInitialTextSizeRem();
 
           function applyFontSize() {
-            transcriptEl.style.fontSize = fontSize.toFixed(2) + "rem";
-            if (editBox) {
-              editBox.style.fontSize = fontSize.toFixed(2) + "rem";
-            }
+            root.style.setProperty('--text-size', fontSizeRem.toFixed(2) + 'rem');
+            // If you keep an inline size on the edit box, sync it too:
+            if (editBox) editBox.style.fontSize = fontSizeRem.toFixed(2) + 'rem';
           }
+
+
+          // Wire buttons
+          fontPlus.onclick = () => {
+            fontSizeRem = Math.min(fontSizeRem + 0.10, 2.00);
+            applyFontSize();
+          };
+          fontMinus.onclick = () => {
+            fontSizeRem = Math.max(fontSizeRem - 0.10, 0.60);
+            applyFontSize();
+          };
+
+          // On load, ensure the var is set once
+          applyFontSize();
+
           async function saveCorrection(filePath, jsonObj) {
             const { data, error } = await supa
               .from("corrections")
@@ -1245,10 +1803,13 @@
             return data[0];
           }
 
+
           // ✅ Button handler calls saveCorrection()
           $('submitBtn').onclick = async () => {
             try {
+              if (!validateChronology(currentTokens)) return;
               const json = JSON.parse(buildJson());
+
               const filePath = currentFileNode
                 ? currentFileNode.dataset.folder + "/" + currentFileNode.dataset.file
                 : null;
@@ -1259,6 +1820,7 @@
               }
 
               const saved = await saveCorrection(filePath, json);
+
               if (saved) {
                 alert("✅ נשמר בהצלחה למסד הנתונים!");
 
@@ -1274,16 +1836,6 @@
             }
           };
 
-
-          fontPlus.onclick = () => {
-            fontSize = Math.min(fontSize + 0.1, 2.0); // cap at 2rem
-            applyFontSize();
-          };
-
-          fontMinus.onclick = () => {
-            fontSize = Math.max(fontSize - 0.1, 0.6); // cap at 0.6rem
-            applyFontSize();
-          };
 
           // ====== Scroll-to-top button
           const scrollTopBtn = document.getElementById("scrollTopBtn");
@@ -1311,9 +1863,6 @@
 
             requestAnimationFrame(step);
           });
-
-
-
         })();
       </script>
 
