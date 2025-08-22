@@ -41,7 +41,11 @@
       padding: 24px;
     }
 
+
+
     :root {
+      --prob-color: 255, 235, 59;
+      --prob-alpha: 0.6;
       --text-size: 1.10rem;
       --gutter-size: 6px;
       --bg: #0b0f14;
@@ -410,7 +414,18 @@
       cursor: pointer
     }
 
+    #probToggle[aria-pressed="true"] {
+      background: rgba(255, 235, 59, .18);
+      border-color: rgba(255, 235, 59, .35);
+    }
 
+    #probOpacity {
+      padding: .5rem .7rem;
+      min-width: 2.2rem;
+      background-color: #fff20078;
+      color: var(--ink)
+        /* override .pill muted text */
+    }
 
     /* Ensure A−/A+ have sufficient contrast */
     #fontMinus,
@@ -672,6 +687,9 @@
               ☁</button>
             <button id="fontMinus" class="pill" type="button" aria-controls="transcript" title="הקטן גופן">A−</button>
             <button id="fontPlus" class="pill" type="button" aria-controls="transcript" title="הגדל גופן">A+</button>
+            <button id="probToggle" class="pill" type="button" style="margin-inline-start:.4rem">הדגש ודאות
+              נמוכה</button>
+
           </div>
         </div>
         <!-- NEW: scrolling container -->
@@ -778,7 +796,6 @@
           const clearTr = () => { tr.innerHTML = ''; wordEls = []; starts = []; ends = []; lastIdx = -1 };
           const deepCopy = x => JSON.parse(JSON.stringify(x));
 
-
           await loadAllCorrections();
 
           function tokenize(text) {
@@ -800,11 +817,23 @@
           function flattenToTokens(d) {
             const toks = []; let lastEnd = 0;
             d.segments.forEach((s, si) => {
-              s.words.forEach(w => { toks.push({ word: String(w.word || ''), start: +w.start || 0, end: +w.end || ((+w.start || 0) + .25), state: 'keep' }); lastEnd = toks[toks.length - 1].end; });
-              if (si < d.segments.length - 1) { toks.push({ word: '\n', start: lastEnd, end: lastEnd, state: 'keep' }); }
+              s.words.forEach(w => {
+                toks.push({
+                  word: String(w.word || ''),
+                  start: +w.start || 0,
+                  end: +w.end || ((+w.start || 0) + .25),
+                  state: 'keep',
+                  probability: Number.isFinite(+w.probability) ? +w.probability : NaN
+                });
+                lastEnd = toks[toks.length - 1].end;
+              });
+              if (si < d.segments.length - 1) {
+                toks.push({ word: '\n', start: lastEnd, end: lastEnd, state: 'keep', probability: NaN });
+              }
             });
             return toks;
           }
+
 
           const wordsToText = (words) => words.filter(w => w.state !== "del").map(w => w.word).join('');
 
@@ -812,11 +841,10 @@
           // Use normalized baseline so LCS aligns unchanged tokens;
           // unchanged words keep EXACT timestamps; only inserts get interpolated.
           function buildFromBaseline(baselineTokens, newText) {
-            const A = normalizeBaselineForDiff(baselineTokens);   // [{word,start,end}]
-            const B = tokenize(newText);                          // [" ", "מילה", " ", ...]
+            const A = normalizeBaselineForDiff(baselineTokens);   // [{word,start,end,probability}]
+            const B = tokenize(newText);                          // [" ", "מילה", ...]
             const aWords = A.map(w => w.word);
 
-            // LCS table
             const m = aWords.length, n = B.length;
             const dp = Array(m + 1).fill(null).map(() => Array(n + 1).fill(0));
             for (let i = m - 1; i >= 0; i--) {
@@ -825,26 +853,23 @@
               }
             }
 
-            // Backtrack → ops
             const out = [];
             let i = 0, j = 0;
             while (i < m && j < n) {
               if (aWords[i] === B[j]) {
-                const w = A[i++];
-                out.push({ word: w.word, start: w.start, end: w.end, state: 'keep' }); // exact times preserved
-                j++;
+                const w = A[i++]; j++;
+                out.push({ word: w.word, start: w.start, end: w.end, state: 'keep', probability: w.probability });
               } else if (dp[i + 1][j] >= dp[i][j + 1]) {
-                const w = A[i++];
-                out.push({ word: w.word, start: w.start, end: w.end, state: 'del' });
+                const w = A[i++]; // deletion from baseline
+                out.push({ word: w.word, start: w.start, end: w.end, state: 'del', probability: w.probability });
               } else {
-                out.push({ word: B[j++], start: NaN, end: NaN, state: 'ins' });
+                out.push({ word: B[j++], start: NaN, end: NaN, state: 'ins', probability: NaN });
               }
             }
-            while (i < m) { const w = A[i++]; out.push({ word: w.word, start: w.start, end: w.end, state: 'del' }); }
-            while (j < n) { out.push({ word: B[j++], start: NaN, end: NaN, state: 'ins' }); }
+            while (i < m) { const w = A[i++]; out.push({ word: w.word, start: w.start, end: w.end, state: 'del', probability: w.probability }); }
+            while (j < n) { out.push({ word: B[j++], start: NaN, end: NaN, state: 'ins', probability: NaN }); }
 
-            assignTimesFromAnchors(out); // only modifies 'ins'
-            repairChronology(out);
+            assignTimesFromAnchors(out);   // keeps probability intact
             return out;
           }
 
@@ -856,38 +881,78 @@
           // give WS runs zero-duration anchors so they never
           // shift word timings.
           function normalizeBaselineForDiff(baselineTokens) {
-            // Baseline from the model may contain leading/trailing spaces inside a single token.
-            // We split into runs, but:
-            //  - non-WS run (the "word") keeps the FULL original token start/end
-            //  - WS runs become zero-duration anchors located proportionally inside the token span
             const out = [];
-            const isWS = (s) => /^\s+$/u.test(s);
+            const isWS = s => /^\s+$/u.test(s);
 
             for (const t of baselineTokens) {
               const txt = String(t.word || '');
-              if (txt === '') { out.push({ word: '', start: t.start, end: t.end }); continue; }
+              const prob = Number.isFinite(t.probability) ? t.probability : NaN;
+
+              if (!txt) { out.push({ word: '', start: t.start, end: t.end, probability: NaN }); continue; }
 
               const parts = txt.match(/\s+|\S+/gu) || [txt];
               let pos = 0;
               for (const p of parts) {
-                const from = pos;
-                const to = pos + p.length;
-                pos = to;
+                const from = pos; pos += p.length;
 
                 if (isWS(p)) {
-                  // Zero-duration anchor inside the token span
                   const span = Math.max(0, (t.end || 0) - (t.start || 0));
                   const L = Math.max(1, txt.length);
                   const anchor = (t.start || 0) + span * (from / L);
-                  out.push({ word: p, start: anchor, end: anchor });
+                  out.push({ word: p, start: anchor, end: anchor, probability: NaN });
                 } else {
-                  // Preserve the ENTIRE original token timing for the word piece
-                  out.push({ word: p, start: t.start, end: t.end });
+                  out.push({ word: p, start: t.start, end: t.end, probability: prob });
                 }
               }
             }
             return out;
           }
+
+          const clamp01 = v => Math.max(0, Math.min(1, v));
+          function setupProbHighlight() {
+            const btn = document.getElementById('probToggle');
+            if (!btn) return;
+
+            const CSS_PROB_COLOR = getComputedStyle(document.documentElement)
+              .getPropertyValue('--prob-color').trim() || '255,235,59';
+            const raw = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--prob-alpha'));
+            const BASE_ALPHA = Number.isFinite(raw) ? raw : 0.6;
+
+            let enabled = (localStorage.getItem('probHL') ?? 'on') !== 'off';
+
+            // define and expose paintWordEl
+            window.paintWordEl = function paintWordEl(el) {
+              const p = parseFloat(el.dataset.prob);
+              if (!enabled || !Number.isFinite(p)) {
+                el.style.backgroundColor = '';
+                return;
+              }
+              const alpha = Math.max(0, Math.min(1, (1 - Math.max(0, Math.min(1, p))) * BASE_ALPHA));
+              el.style.backgroundColor = `rgba(${CSS_PROB_COLOR}, ${alpha})`;
+            };
+
+            // define and expose applyProbStyles
+            window.applyProbStyles = function applyProbStyles() {
+              if (!Array.isArray(wordEls)) return;
+              for (const el of wordEls) window.paintWordEl(el);
+            };
+
+            function setUI() {
+              btn.setAttribute('aria-pressed', String(enabled));
+
+            }
+
+            btn.addEventListener('click', () => {
+              enabled = !enabled;
+              localStorage.setItem('probHL', enabled ? 'on' : 'off');
+              setUI();
+              window.applyProbStyles();
+            });
+
+            setUI();
+          }
+
+          setupProbHighlight();
 
           // Drop-in replacement
           function assignTimesFromAnchors(arr) {
@@ -1043,39 +1108,34 @@
               prev = Math.max(prev, t.start);
             }
           }
-
           function render() {
             if (editingFull.active) return;
             clearTr();
             const f = document.createDocumentFragment();
-
+            wordEls = [];
+            starts = [];
+            ends = [];
             currentTokens.forEach((w, ti) => {
-              // ⛔️ Don't render deleted tokens at all
               if (w.state === 'del') return;
-
-              if (w.word === '\n') {
-                f.appendChild(document.createTextNode('\n'));
-                return;
-              }
+              if (w.word === '\n') { f.appendChild(document.createTextNode('\n')); return; }
 
               const sp = document.createElement('span');
-              sp.className = 'word';            // keep transcript clean: no diff classes
+              sp.className = 'word';
               sp.textContent = w.word;
               sp.dataset.start = w.start;
               sp.dataset.end = w.end;
               sp.dataset.ti = ti;
 
-              f.appendChild(sp);
+              if (Number.isFinite(w.probability)) sp.dataset.prob = String(w.probability);
 
-              // only non-deleted words are navigable/highlightable
+              f.appendChild(sp);
               wordEls.push(sp);
               starts.push(w.start);
               ends.push(w.end);
             });
-
-            tr.appendChild(f);
+            transcriptEl.appendChild(f);
+            window.applyProbStyles();
           }
-
 
           // ====== Word interactions (Event Delegation)
           tr.onclick = e => {
@@ -1201,7 +1261,8 @@
 
           function cancelFullEdit() {
             if (!editingFull.active) return; const resume = editingFull.resume;
-            editingFull = { active: false, resume: false, original: '', caret: 0 }; editBox = null; render();
+            editingFull = { active: false, resume: false, original: '', caret: 0 }; editBox = null;
+            render();
             renderDiff();
             if (resume && !player.ended) try { player.play() } catch { };
           }
@@ -1661,9 +1722,10 @@
 
               // tokens לרינדור/עריכה
               baselineTokens = flattenToTokens(data);
-              currentTokens = baselineTokens.map(t => ({
-                word: t.word, start: t.start, end: t.end, state: "keep"
+              currentTokens = baselineTokens.map(({ word, start, end, probability }) => ({
+                word, start, end, probability, state: 'keep'
               }));
+
               repairChronology(currentTokens);
 
               data = tokensToData(currentTokens);
