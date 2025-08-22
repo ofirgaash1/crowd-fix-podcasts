@@ -404,7 +404,7 @@
       border: 1px solid rgba(255, 255, 255, .08);
       padding: .3rem .6rem;
       border-radius: 999px;
-      font-size: .85rem;
+      font-size: 1rem;
       color: var(--muted);
       user-select: none;
       cursor: pointer
@@ -618,8 +618,8 @@
 
           <div class="cluster">
             <button id="settingsBtn" class="pill" type="button" aria-haspopup="dialog" aria-controls="modal"
-              title="הגדרות">⚙️</button>
-            <button class="pill" id="dlVtt" type="button" title="הורד VTT" aria-label="הורד VTT">⬇️ VTT</button>
+              title="הגדרות">⚙️ צדיק, הזנת טוקן?</button>
+            <button class="pill" id="dlVtt" type="button" title="הורד VTT" aria-label="הורד VTT">הורדת VTT</button>
             <details class="hint" id="kbdHelp">
               <summary aria-label="קיצורי מקלדת">קיצורי מקלדת</summary>
               <div>קליק ימני לעריכת הטקסט · Enter לשמירה · Esc לביטול · Ctrl+Z לביטול · Ctrl+Shift+Z לשחזור</div>
@@ -666,9 +666,10 @@
 
       <section class="card" id="transcriptCard" aria-labelledby="transcriptCardTitle">
         <div class="head">
-          <h2 id="transcriptCardTitle">תמלול (קליק ימני לעריכה)</h2>
+          <h2 id="transcriptCardTitle">תמליל נוכחי (קליק ימני לעריכה)</h2>
           <div role="group" aria-label="פקדי תמליל">
-            <button id="submitBtn" class="pill" type="button" aria-controls="transcript">⬆️ שמור תיקון</button>
+            <button id="submitBtn" class="pill" type="button" aria-controls="transcript">שמירה אל ענן התיקונים
+              ☁</button>
             <button id="fontMinus" class="pill" type="button" aria-controls="transcript" title="הקטן גופן">A−</button>
             <button id="fontPlus" class="pill" type="button" aria-controls="transcript" title="הגדל גופן">A+</button>
           </div>
@@ -683,7 +684,7 @@
 
       <section class="card" id="diffCard" aria-labelledby="diffCardTitle">
         <div class="head">
-          <h2 id="diffCardTitle" class="diffCardTitle">השוואת שינויים לדאטה סט</h2>
+          <h2 id="diffCardTitle" class="diffCardTitle">שינויים ביחס למקור</h2>
         </div>
         <!-- NEW: scrolling container -->
         <div class="body">
@@ -1396,49 +1397,19 @@
 
             if (!base) { diffBody.textContent = cur; return; }
 
-            // Your usual DMP tuning (keep or adjust)
-            DMP.Diff_Timeout = 1;
-            DMP.Diff_EditCost = 6;
+            // טיונינג קטן: זמן ו-EditCost מטים גבולות לעבר פיסוק/רווח
+            DMP.Diff_Timeout = 2;   // עד 1 שנ' חישוב
+            DMP.Diff_EditCost = 8;  // מעט "יקר" לשינוי, מעודד גבולות טובים יותר
 
-            // 1) Produce diffs (token-based if available, else char-based)
-            let diffs;
-            if (typeof diffTokens === 'function') {
-              // diffTokens returns [op, arrayOfTokens]
-              diffs = diffTokens(base, cur);
-            } else {
-              // DMP returns [op, string]
-              diffs = DMP.diff_main(base, cur);
-              DMP.diff_cleanupSemantic(diffs);
-              DMP.diff_cleanupSemanticLossless(diffs);
-            }
+            const diffs = DMP.diff_main(base, cur);
+            DMP.diff_cleanupSemantic(diffs);
+            DMP.diff_cleanupSemanticLossless(diffs); // <-- הוספה חשובה
 
-            // 2) Build HTML runs (one span per op run)
-            const runs = diffs.map(([op, data]) => {
-              const txt = Array.isArray(data) ? data.join('') : data;
-              const safe = escapeHtml(txt);
-              if (op === 1) return `<span class="diff-insert">${safe}</span>`;
-              if (op === -1) return `<span class="diff-delete">${safe}</span>`;
-              return `<span class="diff-equal">${safe}</span>`;
-            });
-
-            // 3) Chunk the runs so the DOM is segmented and eligible for content-visibility
-            const MAX_RUNS = 200;   // ~200 spans per chunk
-            const MAX_CHARS = 8000;  // ~8k HTML chars per chunk (rough heuristic)
-
-            const chunks = [];
-            let buf = '', runCount = 0, charCount = 0;
-
-            for (const run of runs) {
-              const len = run.length;
-              if ((runCount >= MAX_RUNS || charCount + len > MAX_CHARS) && buf) {
-                chunks.push(`<div class="diff-chunk">${buf}</div>`);
-                buf = ''; runCount = 0; charCount = 0;
-              }
-              buf += run; runCount++; charCount += len;
-            }
-            if (buf) chunks.push(`<div class="diff-chunk">${buf}</div>`);
-
-            diffBody.innerHTML = chunks.join('');
+            diffBody.innerHTML = diffs.map(([op, data]) => {
+              if (op === 1) return `<span class="diff-insert">${escapeHtml(data)}</span>`;
+              if (op === -1) return `<span class="diff-delete">${escapeHtml(data)}</span>`;
+              return `<span class="diff-equal">${escapeHtml(data)}</span>`;
+            }).join('');
           }
 
 
@@ -1750,6 +1721,60 @@
               ms = ('00' + Math.floor((t % 1) * 1000)).slice(-3);
             return `${h}:${m}:${s}.${ms}`;
           };
+          (function autoScrollNudgeFolders() {
+            const el = document.getElementById('folders');
+            if (!el) return;
+
+            const EPS = 2;
+            const hasOverflow = () => el.scrollHeight > el.clientHeight + EPS;
+            let cancelled = false, isAuto = false;
+
+            const cancel = () => { cancelled = true; isAuto = false; cleanup(); };
+            const onUserScroll = () => { if (!isAuto) cancel(); };
+
+            function cleanup() {
+              el.removeEventListener('wheel', cancel, { passive: true });
+              el.removeEventListener('touchstart', cancel, { passive: true });
+              el.removeEventListener('pointerdown', cancel, { passive: true });
+              el.removeEventListener('keydown', cancel);
+              el.removeEventListener('scroll', onUserScroll, { passive: true });
+            }
+
+            function nudge(durationMs = 1500) {
+              const el = document.getElementById('folders');
+              if (!el) return;
+
+              // Only if it actually overflows
+              if (el.scrollHeight <= el.clientHeight + 1) return;
+
+              // Jump to bottom instantly (avoid CSS smooth behavior if set)
+              const prev = el.style.scrollBehavior;
+              el.style.scrollBehavior = 'auto';
+              el.scrollTop = el.scrollHeight - el.clientHeight;
+              el.style.scrollBehavior = prev;
+
+              const from = el.scrollTop;
+              const to = 0;
+              const t0 = performance.now();
+
+              // easeInOutQuad
+              const ease = t => (t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t);
+
+              function step(now) {
+                const p = Math.min(1, (now - t0) / durationMs);
+                const e = ease(p);
+                el.scrollTop = from + (to - from) * e;
+                if (p < 1) requestAnimationFrame(step);
+              }
+              requestAnimationFrame(step);
+            }
+
+            // kick once after initial render; call this again if you rebuild the list
+            setTimeout(nudge, 300);
+
+            // expose to rerun after data loads
+            window.nudgeFoldersScroll = () => { cancelled = false; nudge(); };
+          })();
 
           function buildVtt() {
             // נרצה להתריע גם כאן אם יש בעיות
