@@ -1351,7 +1351,7 @@
 
             // טיונינג קטן: זמן ו-EditCost מטים גבולות לעבר פיסוק/רווח
             DMP.Diff_Timeout = 2;   // עד 1 שנ' חישוב
-            DMP.Diff_EditCost = 100;  // מעט "יקר" לשינוי, מעודד גבולות טובים יותר
+            DMP.Diff_EditCost = 8;  // מעט "יקר" לשינוי, מעודד גבולות טובים יותר
 
             const diffs = DMP.diff_main(base, cur);
             DMP.diff_cleanupSemantic(diffs);
