@@ -101,6 +101,11 @@ const state = {
 
   // probability highlighting
   probEnabled: (localStorage.getItem(LS_PROBHL) ?? 'on') !== 'off',
+
+  /* ▼▼ confirmations ▼▼ */
+  confirmedMarksRaw: [],   // raw rows from DB (with anchors)
+  confirmedRanges: [],     // [{id, range:[start,end]}] mapped to current text
+
 };
 
 /* =========================
@@ -158,7 +163,312 @@ const utils = {
   escapeHtml: (text) =>
     String(text).replace(/[&<>"']/g, (c) => (
       { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
-    ))
+    )),
+
+  clamp: (n, lo, hi) => Math.max(lo, Math.min(hi, n)),
+  clamp01: (v) => Math.max(0, Math.min(1, v)),
+
+  /* --- added for confirmations / selection / hashing --- */
+  sha256: async (text) => {
+    const buf = new TextEncoder().encode(text);
+    const hash = await crypto.subtle.digest('SHA-256', buf);
+    return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('');
+  },
+
+  getCurrentPlainText: () => {
+    if (state.editBox && state.editingFull.active) return (state.editBox.innerText || '').replace(/\r/g, '');
+    return state.data?.text || '';
+  },
+
+  getSelectionOffsetsIn(container) {
+    const sel = getSelection(); if (!sel || !sel.rangeCount) return null;
+    const r = sel.getRangeAt(0);
+    const inC = (n) => n && (n === container || container.contains(n));
+    if (!(inC(r.startContainer) || inC(r.endContainer))) return null;
+
+    const probe = document.createRange();
+    probe.selectNodeContents(container);
+
+    let s = 0, e = 0;
+    try { probe.setEnd(r.startContainer, r.startOffset); s = probe.toString().length; } catch { }
+    try { probe.setEnd(r.endContainer, r.endOffset); e = probe.toString().length; } catch { }
+    if (s === e) return null;
+    return [Math.min(s, e), Math.max(s, e)];
+  },
+
+  getCurrentSelectionOffsets() {
+    return (state.editingFull.active && state.editBox)
+      ? utils.getSelectionOffsetsIn(state.editBox)
+      : utils.getSelectionOffsetsIn(els.transcript);
+  },
+
+  buildAnchors(text, start, end, ctx = 32) {
+    return {
+      start_offset: start,
+      end_offset: end,
+      prefix: text.slice(Math.max(0, start - ctx), start),
+      exact: text.slice(start, end),
+      suffix: text.slice(end, Math.min(text.length, end + ctx))
+    };
+  },
+};
+
+/* =========================
+   Confirmations (green text)
+   ========================= */
+const confirm = {
+  /* ---- DB helpers ---- */
+  async ensureTranscriptRow(filePath) {
+    const { error } = await supa.from('transcripts').upsert({ file_path: filePath }, { onConflict: 'file_path' });
+    if (error) throw error;
+  },
+  async fetch(filePath) {
+    const { data, error } = await supa
+      .from('transcript_confirmations')
+      .select('*')
+      .eq('file_path', filePath)
+      .order('created_at', { ascending: true });
+    if (error) throw error;
+    return data || [];
+  },
+  async save(filePath, mark) {
+    await confirm.ensureTranscriptRow(filePath);
+    const base_sha256 = await utils.sha256(utils.getCurrentPlainText());
+    const row = { file_path: filePath, base_sha256, ...mark };
+    const { error } = await supa.from('transcript_confirmations').insert(row);
+    if (error) throw error;
+  },
+  async del(ids) {
+    if (!ids?.length) return;
+    const { error } = await supa.from('transcript_confirmations').delete().in('id', ids);
+    if (error) throw error;
+  },
+
+  /* ---- reattach ---- */
+  reattachMarkToText(mark, text) {
+    if (!mark?.exact) return null;
+    const hint = Math.max(0, Math.min(text.length, mark.start_offset || 0));
+    DMP.Match_Threshold = 0.35;
+    DMP.Match_Distance = 1000;
+    let loc = DMP.match_main(text, mark.exact, hint);
+    if (loc >= 0) return [loc, loc + mark.exact.length];
+
+    if (mark.prefix) {
+      const ph = DMP.match_main(text, mark.prefix, Math.max(0, hint - mark.prefix.length));
+      if (ph >= 0) {
+        loc = DMP.match_main(text, mark.exact, ph);
+        if (loc >= 0) return [loc, loc + mark.exact.length];
+      }
+    }
+    if (mark.suffix) {
+      const sh = DMP.match_main(text, mark.suffix, hint);
+      if (sh >= 0) {
+        loc = DMP.match_main(text, mark.exact, Math.max(0, sh - mark.exact.length));
+        if (loc >= 0) return [loc, loc + mark.exact.length];
+      }
+    }
+    loc = text.indexOf(mark.exact);
+    return (loc >= 0) ? [loc, loc + mark.exact.length] : null;
+  },
+  reattachAll(marks, text) {
+    const out = [];
+    for (const m of marks) {
+      const span = confirm.reattachMarkToText(m, text);
+      if (span) out.push({ id: m.id, range: span });
+    }
+    return out;
+  },
+
+  /* ---- painting ---- */
+  applyHighlights() {
+    if (!state.wordEls?.length) return;
+    const ranges = state.confirmedRanges || [];
+
+    // precompute absolute char index per token
+    const abs = [];
+    let acc = 0;
+    for (let i = 0; i < state.currentTokens.length; i++) {
+      const t = state.currentTokens[i];
+      abs[i] = acc;
+      if (t.state !== 'del') acc += (t.word || '').length;
+    }
+
+    for (const el of state.wordEls) {
+      el.classList.remove('confirmed');
+      const ti = +el.dataset.ti;
+      const t = state.currentTokens[ti];
+      if (!t || t.state === 'del' || t.word === '\n') continue;
+      const s = abs[ti];
+      const e = s + (t.word || '').length;
+      const hit = ranges.some(({ range: [a, b] }) => !(e <= a || s >= b));
+      if (hit) el.classList.add('confirmed');
+    }
+  },
+
+  applyEditPreview() {
+    if (!(state.editBox && state.editingFull.active)) return;
+
+    // unwrap old
+    state.editBox.querySelectorAll('span.confirmed').forEach(el => {
+      const p = el.parentNode;
+      while (el.firstChild) p.insertBefore(el.firstChild, el);
+      p.removeChild(el);
+    });
+
+    const text = (state.editBox.innerText || '').replace(/\r/g, '');
+    const ranges = (state.confirmedRanges || []).slice().sort((a, b) => a.range[0] - b.range[0]);
+
+    const tw = document.createTreeWalker(state.editBox, NodeFilter.SHOW_TEXT, null);
+    let node, offset = 0, i = 0;
+    while ((node = tw.nextNode())) {
+      const len = node.nodeValue.length;
+      const start = offset, end = offset + len;
+      while (i < ranges.length && ranges[i].range[1] <= start) i++;
+      let k = i;
+      while (k < ranges.length && ranges[k].range[0] < end) {
+        const a = Math.max(start, ranges[k].range[0]) - start;
+        const b = Math.min(end, ranges[k].range[1]) - start;
+        if (b > a) {
+          const r = document.createRange();
+          r.setStart(node, a);
+          r.setEnd(node, b);
+          const span = document.createElement('span');
+          span.className = 'confirmed';
+          try { r.surroundContents(span); }
+          catch {
+            const frag = r.cloneContents();
+            span.appendChild(frag);
+            r.deleteContents();
+            r.insertNode(span);
+          }
+        }
+        k++;
+      }
+      offset += len;
+    }
+  },
+
+  /* ---- selection coverage & splitting ---- */
+  selectionCoverage(sel) {
+    if (!sel) return 0;
+    const [s, e] = sel, L = Math.max(1, e - s);
+    let covered = 0;
+    for (const { range: [a, b] } of (state.confirmedRanges || [])) {
+      const x = Math.max(s, a), y = Math.min(e, b);
+      if (y > x) covered += (y - x);
+    }
+    return covered / L;
+  },
+  subtractSpan([a, b], [s, e]) {
+    if (e <= a || s >= b) return [[a, b]];
+    if (s <= a && e >= b) return [];
+    if (s <= a && e < b) return [[e, b]];
+    if (s > a && e >= b) return [[a, s]];
+    return [[a, s], [e, b]];
+  },
+
+  /* ---- buttons ---- */
+  updateButtons() {
+    const yes = document.getElementById('markReliable');
+    const no = document.getElementById('markUnreliable');
+    if (!yes || !no) return;
+
+    const sel = utils.getCurrentSelectionOffsets();
+    if (!sel) { yes.style.display = 'none'; no.style.display = 'none'; return; }
+
+    const frac = confirm.selectionCoverage(sel);
+    if (frac <= 0) {          // 0% confirmed
+      yes.style.display = '';
+      no.style.display = 'none';
+    } else if (frac >= 1) {   // 100% confirmed
+      yes.style.display = 'none';
+      no.style.display = '';
+    } else {                 // mixed
+      yes.style.display = '';
+      no.style.display = '';
+    }
+  },
+
+  setupButtons() {
+    const yes = document.getElementById('markReliable');
+    const no = document.getElementById('markUnreliable');
+    if (!yes || !no) return;
+
+    [yes, no].forEach(b => b.addEventListener('pointerdown', e => e.preventDefault()));
+
+    yes.addEventListener('click', async () => {
+      const sel = utils.getCurrentSelectionOffsets(); if (!sel) return;
+      const [s, e] = sel;
+      const text = utils.getCurrentPlainText();
+      const mark = utils.buildAnchors(text, s, e, 32);
+      const filePath = state.currentFileNode
+        ? state.currentFileNode.dataset.folder + '/' + state.currentFileNode.dataset.file
+        : null;
+      if (!filePath) { alert('אין קובץ נבחר'); return; }
+
+      try {
+        await confirm.save(filePath, mark);
+        await confirm.refreshForCurrentFile();
+      } catch (err) {
+        console.error(err); alert('שגיאה בסימון אמין');
+      }
+    });
+
+    no.addEventListener('click', async () => {
+      const sel = utils.getCurrentSelectionOffsets(); if (!sel) return;
+      const [s, e] = sel;
+      const filePath = state.currentFileNode
+        ? state.currentFileNode.dataset.folder + '/' + state.currentFileNode.dataset.file
+        : null;
+      if (!filePath) { alert('אין קובץ נבחר'); return; }
+
+      try {
+        const text = utils.getCurrentPlainText();
+        const live = confirm.reattachAll(state.confirmedMarksRaw, text);
+        const overlapping = live.filter(m => !(e <= m.range[0] || s >= m.range[1]));
+        if (!overlapping.length) { confirm.updateButtons(); return; }
+
+        const leftovers = [];
+        const base_sha256 = await utils.sha256(text);
+        for (const m of overlapping) {
+          for (const [x, y] of confirm.subtractSpan(m.range, [s, e])) {
+            if (y > x) leftovers.push({
+              file_path: filePath,
+              base_sha256,
+              ...utils.buildAnchors(text, x, y, 32)
+            });
+          }
+        }
+        if (leftovers.length) {
+          await confirm.ensureTranscriptRow(filePath);
+          const { error } = await supa.from('transcript_confirmations').insert(leftovers);
+          if (error) throw error;
+        }
+        await confirm.del(overlapping.map(m => m.id));
+        await confirm.refreshForCurrentFile();
+      } catch (err) {
+        console.error(err); alert('שגיאה בסימון כלא אמין');
+      }
+    });
+
+    document.addEventListener('selectionchange', confirm.updateButtons);
+    elements.transcript.addEventListener('mouseup', confirm.updateButtons);
+  },
+
+  /* ---- refresh (call after load or text changes) ---- */
+  async refreshForCurrentFile() {
+    const filePath = state.currentFileNode
+      ? state.currentFileNode.dataset.folder + '/' + state.currentFileNode.dataset.file
+      : null;
+    if (!filePath) return;
+
+    state.confirmedMarksRaw = await confirm.fetch(filePath);
+    state.confirmedRanges = confirm.reattachAll(state.confirmedMarksRaw, utils.getCurrentPlainText());
+
+    confirm.applyHighlights();
+    confirm.applyEditPreview();
+    confirm.updateButtons();
+  },
 };
 
 /* =========================
@@ -488,6 +798,8 @@ function render() {
 
   els.transcript.appendChild(f);
   applyProbHighlights(); // paint (or clear) based on toggle
+  confirm.applyHighlights();
+  confirm.updateButtons();
 }
 
 function renderDiff() {
@@ -564,23 +876,36 @@ function ensureEditUI() {
   els.transcript.appendChild(box);
   state.editBox = box;
 
+  // ENTER commits, ESC cancels
   box.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); commitFullEdit(); }
     else if (e.key === 'Escape') { e.preventDefault(); cancelFullEdit(); }
   });
-  box.addEventListener('input', renderDiff);
 
+  // Keep diff + confirmation preview + buttons in sync while typing
+  box.addEventListener('input', () => {
+    renderDiff();
+    // confirmed green overlay inside edit box
+    (typeof confirm !== 'undefined' && confirm?.applyEditPreview) && confirm.applyEditPreview();
+    // buttons (mark reliable / unreliable) visibility
+    (typeof confirm !== 'undefined' && confirm?.updateButtons) && confirm.updateButtons();
+  });
+
+  // One-time global: left-click outside transcript commits (but ignore clicks on the transcript header strip)
   if (!ensureEditUI._outsideBound) {
     document.addEventListener('mousedown', (e) => {
       if (e.button !== 0) return;
-      if (state.editingFull.active && state.editBox && !els.transcript.contains(e.target)) {
-        e.preventDefault();
-        commitFullEdit();
-      }
+      if (!(state.editingFull.active && state.editBox)) return;
+      const t = e.target;
+      if (els.transcript.contains(t)) return;                  // click inside edit area → ignore
+      if (t.closest('#transcriptCard .head')) return;          // click on transcript toolbar → ignore
+      e.preventDefault();
+      commitFullEdit();
     }, true);
     ensureEditUI._outsideBound = true;
   }
 }
+
 
 function getFullText() { return wordsToText(state.currentTokens); }
 
@@ -627,31 +952,77 @@ function commitFullEdit() {
   if (newText === (state.editingFull.original || '')) {
     state.editingFull = { active: false, resume: false, original: '', caret: 0 };
     state.editBox = null;
-    render(); renderDiff(); applyProbHighlights();
+    render();
+    renderDiff();
+    // confirmations
+    (typeof confirm !== 'undefined' && confirm?.applyHighlights) && confirm.applyHighlights();
+    (typeof confirm !== 'undefined' && confirm?.applyEditPreview) && confirm.applyEditPreview();
+    (typeof confirm !== 'undefined' && confirm?.updateButtons) && confirm.updateButtons();
+    // probability repaint (whichever function name you currently have)
+    if (typeof window.applyProbStyles === 'function') window.applyProbStyles();
+    else if (typeof window.applyProbHighlights === 'function') window.applyProbHighlights();
     if (resume && !els.player.ended) { try { els.player.play(); } catch { } }
     return;
   }
 
-  state.undoStack.push(snapshot());
+  // Save state for undo before applying change
+  state.undoStack.push(JSON.parse(JSON.stringify(state.currentTokens)));
   state.redoStack = [];
 
-  state.currentTokens = buildFromBaseline(state.baselineTokens, newText);
+  // Rebuild tokens from baseline using LCS (if available), else fallback to naive rebuild
+  if (typeof buildFromBaseline === 'function') {
+    state.currentTokens = buildFromBaseline(state.baselineTokens, newText);
+  } else {
+    // Fallback – simple tokens -> data (keeps text, loses precise alignment)
+    const toks = [];
+    for (const ch of Array.from(newText)) toks.push({ word: ch, start: NaN, end: NaN, state: 'ins', probability: NaN });
+    state.currentTokens = toks;
+  }
+
+  // Ensure chronology and rebuild data structure
+  repairChronology(state.currentTokens);
   state.data = tokensToData(state.currentTokens);
 
+  // Exit edit mode
   state.editingFull = { active: false, resume: false, original: '', caret: 0 };
   state.editBox = null;
-  render(); renderDiff(); applyProbHighlights();
+
+  // Re-render everything
+  render();
+  renderDiff();
+  (typeof confirm !== 'undefined' && confirm?.applyHighlights) && confirm.applyHighlights();
+  (typeof confirm !== 'undefined' && confirm?.applyEditPreview) && confirm.applyEditPreview();
+  (typeof confirm !== 'undefined' && confirm?.updateButtons) && confirm.updateButtons();
+  // refresh confirmations from DB (reattach to new text)
+  (typeof confirm !== 'undefined' && confirm?.refreshForCurrentFile) && confirm.refreshForCurrentFile().catch(console.error);
+
+  // probability repaint
+  if (typeof window.applyProbStyles === 'function') window.applyProbStyles();
+  else if (typeof window.applyProbHighlights === 'function') window.applyProbHighlights();
+
   if (resume && !els.player.ended) { try { els.player.play(); } catch { } }
 }
+
 
 function cancelFullEdit() {
   if (!state.editingFull.active) return;
   const resume = state.editingFull.resume;
+
   state.editingFull = { active: false, resume: false, original: '', caret: 0 };
   state.editBox = null;
-  render(); renderDiff(); applyProbHighlights();
+
+  render();
+  renderDiff();
+  (typeof confirm !== 'undefined' && confirm?.applyHighlights) && confirm.applyHighlights();
+  (typeof confirm !== 'undefined' && confirm?.applyEditPreview) && confirm.applyEditPreview();
+  (typeof confirm !== 'undefined' && confirm?.updateButtons) && confirm.updateButtons();
+
+  if (typeof window.applyProbStyles === 'function') window.applyProbStyles();
+  else if (typeof window.applyProbHighlights === 'function') window.applyProbHighlights();
+
   if (resume && !els.player.ended) { try { els.player.play(); } catch { } }
 }
+
 
 /* =========================
    Browser (HF) + Supabase
@@ -794,7 +1165,11 @@ async function load(audioPath, trPath) {
     // 1) try correction from DB
     let corrected = null;
     try {
-      const { data, error } = await supa.from('corrections').select('json_data').eq('file_path', audioPath).maybeSingle();
+      const { data, error } = await supa
+        .from('corrections')
+        .select('json_data')
+        .eq('file_path', audioPath)
+        .maybeSingle();
       if (!error && data) {
         corrected = data.json_data;
         console.log('✅ Loaded corrected JSON from Supabase');
@@ -816,6 +1191,7 @@ async function load(audioPath, trPath) {
       const ct = (r.headers.get('content-type') || '').toLowerCase();
       if (ct.includes('application/gzip') || trPath.endsWith('.gz')) {
         const ab = await r.arrayBuffer();
+        // use your existing ungzip (pako/ungzip) helper
         txt = new TextDecoder('utf-8').decode(ungzip(new Uint8Array(ab)));
       } else {
         txt = await r.text();
@@ -852,7 +1228,19 @@ async function load(audioPath, trPath) {
     repairChronology(state.currentTokens);
 
     state.data = tokensToData(state.currentTokens);
-    render(); renderDiff();
+
+    // Render transcript + diff
+    render();
+    renderDiff();
+
+    // Paint confirmations and sync DB-based marks to current text
+    if (token !== state.lastLoad.token) return;
+    if (typeof confirm !== 'undefined' && confirm?.refreshForCurrentFile) {
+      await confirm.refreshForCurrentFile();
+    } else {
+      // At least paint once if confirm module isn't loaded
+      (typeof confirm !== 'undefined' && confirm?.applyHighlights) && confirm.applyHighlights();
+    }
 
     if (token !== state.lastLoad.token) return;
 
@@ -933,11 +1321,32 @@ function setupPlayerAndControls() {
   els.fontPlus.onclick = () => { state.fontSizeRem = Math.min(state.fontSizeRem + 0.10, 2.00); applyFontSize(); };
   els.fontMinus.onclick = () => { state.fontSizeRem = Math.max(state.fontSizeRem - 0.10, 0.60); applyFontSize(); };
 
-  els.settingsBtn.onclick = () => { els.modal.classList.add('open'); els.hfToken.value = utils.getTok(); };
+  els.settingsBtn.onclick = () => {
+    els.modal.classList.add('open');
+    els.hfToken.value = utils.getTok();
+    // focus the token input on open
+    requestAnimationFrame(() => els.hfToken?.focus());
+  };
   els.mClose.onclick = () => els.modal.classList.remove('open');
-  els.mSave.onclick = () => { utils.setTok(els.hfToken.value.trim()); els.modal.classList.remove('open'); };
-  els.mClear.onclick = () => { utils.setTok(''); els.hfToken.value = ''; };
-  els.modal.addEventListener('click', (e) => { if (e.target === els.modal) els.modal.classList.remove('open'); });
+  els.mSave.onclick = () => {
+    utils.setTok(els.hfToken.value.trim());
+    els.modal.classList.remove('open');
+  };
+  els.mClear.onclick = () => {
+    utils.setTok('');
+    els.hfToken.value = '';
+  };
+  els.modal.addEventListener('click', (e) => {
+    if (e.target === els.modal) els.modal.classList.remove('open');
+  });
+
+  // ESC to close the modal (added)
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && els.modal.classList.contains('open')) {
+      els.modal.classList.remove('open');
+    }
+  });
+
 
   els.dlVtt.onclick = () => {
     const blob = new Blob([buildVtt()], { type: 'text/vtt' });
@@ -1283,6 +1692,37 @@ function init() {
   window.addEventListener('beforeunload', () => {
     if (state.objUrl) try { URL.revokeObjectURL(state.objUrl); } catch { }
   });
+
+  confirm.setupButtons();
 }
+
+
+(function setupThemeToggle() {
+  const body = document.body;
+  const toggleBtn = document.getElementById('themeToggle');
+  const themeIcon = document.getElementById('themeIcon');
+  if (!toggleBtn || !themeIcon) return;
+
+  function applyTheme(mode) {
+    if (mode === 'dark') {
+      body.classList.add('dark-mode');
+      themeIcon.textContent = '☀️';
+    } else {
+      body.classList.remove('dark-mode');
+      themeIcon.textContent = '🌙';
+    }
+    localStorage.setItem('theme', mode);
+  }
+
+  const saved = localStorage.getItem('theme');
+  const prefersDark = matchMedia('(prefers-color-scheme: dark)').matches;
+  applyTheme(saved ? saved : (prefersDark ? 'dark' : 'light'));
+
+  toggleBtn.addEventListener('click', () => {
+    const isDark = body.classList.contains('dark-mode');
+    applyTheme(isDark ? 'light' : 'dark');
+  });
+})();
+
 
 init();

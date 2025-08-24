@@ -312,12 +312,12 @@ header {
   background: var(--active-bg);
 }
 
-/* Confirmed ranges (JS wraps spans in edit preview) */
+/* Confirmed ranges (JS wraps spans in edit preview) — green TEXT, no bg */
 #transcript .confirmed,
 #editBox .confirmed {
-  background: rgba(34, 197, 94, .18);
-  box-shadow: inset 0 0 0 1px rgba(34, 197, 94, .45);
-  border-radius: .2rem;
+  color: var(--ok, #138a36);
+  background: transparent !important;
+  box-shadow: none !important;
 }
 
 /* ContentEditable styling for full edit mode */
