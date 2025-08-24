@@ -1,10 +1,12 @@
 /* ===========================
    Root variables & base setup
    =========================== */
-:root{
+:root {
   /* Layout */
-  --w-nav: 320px;     /* browser (folders/files) column width */
-  --w-diff: 360px;    /* diff column width */
+  --w-nav: 320px;
+  /* browser (folders/files) column width */
+  --w-diff: 360px;
+  /* diff column width */
 
   /* Typography */
   --font-body: system-ui, "Segoe UI", "Noto Sans Hebrew", "Rubik", Arial, sans-serif;
@@ -12,12 +14,18 @@
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
   /* Colors (light theme) */
-  --bg: #0a0a0a;            /* page background */
-  --panel: #121212;         /* card background */
-  --muted: #878787;         /* secondary text */
-  --fg: #efefef;            /* primary text */
-  --accent: #3ea6ff;        /* focus/links */
-  --border: #242424;        /* dividers */
+  --bg: #0a0a0a;
+  /* page background */
+  --panel: #121212;
+  /* card background */
+  --muted: #878787;
+  /* secondary text */
+  --fg: #efefef;
+  /* primary text */
+  --accent: #3ea6ff;
+  /* focus/links */
+  --border: #242424;
+  /* dividers */
   --pill-bg: #1c1c1c;
   --pill-fg: #efefef;
   --pill-bg-hover: #232323;
@@ -31,17 +39,18 @@
   --active-bg: rgba(62, 166, 255, .20);
 
   /* Probability highlight (JS reads these) */
-  --prob-color: 255, 235, 59;  /* bright yellow */
+  --prob-color: 255, 235, 59;
+  /* bright yellow */
   --prob-alpha: .6;
 
   /* Elevation */
-  --shadow-1: 0 2px 10px rgba(0,0,0,.28);
-  --shadow-2: 0 8px 24px rgba(0,0,0,.35);
+  --shadow-1: 0 2px 10px rgba(0, 0, 0, .28);
+  --shadow-2: 0 8px 24px rgba(0, 0, 0, .35);
 }
 
 /* Respect system dark/light – easy to retheme later */
-@media (prefers-color-scheme: light){
-  :root{
+@media (prefers-color-scheme: light) {
+  :root {
     --bg: #f8f8fb;
     --panel: #ffffff;
     --muted: #6b7280;
@@ -61,37 +70,54 @@
 /* ===========================
    Base element resets
    =========================== */
-* { box-sizing: border-box; }
-html, body { height: 100%; }
-html { scroll-behavior: smooth; }
-body{
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
   margin: 0;
   font: 400 15px/1.5 var(--font-body);
   color: var(--fg);
   background: var(--bg);
   direction: rtl;
   display: flex;
-  flex-direction: column; /* header on top, main grows */
+  flex-direction: column;
+  /* header on top, main grows */
 }
 
 /* Utilities */
-.visually-hidden{
-  position: absolute!important;
-  width: 1px!important;
-  height: 1px!important;
-  padding: 0!important;
-  margin: -1px!important;
-  overflow: hidden!important;
-  clip: rect(0 0 1px 1px)!important;
-  clip-path: inset(50%)!important;
-  border: 0!important;
+.visually-hidden {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0 0 1px 1px) !important;
+  clip-path: inset(50%) !important;
+  border: 0 !important;
 }
 
-.hint{ color: var(--muted); font-size: .92em; }
-.err{ color: #ef4444; }
+.hint {
+  color: var(--muted);
+  font-size: .92em;
+}
+
+.err {
+  color: #ef4444;
+}
 
 /* Buttons */
-button{
+button {
   font: inherit;
   color: inherit;
   background: transparent;
@@ -100,12 +126,17 @@ button{
   padding: .35rem .7rem;
   cursor: pointer;
 }
-button:hover{ background: var(--pill-bg-hover); }
-button:focus-visible{
+
+button:hover {
+  background: var(--pill-bg-hover);
+}
+
+button:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
-.pill{
+
+.pill {
   background: var(--pill-bg);
   color: var(--pill-fg);
   border: 1px solid var(--border);
@@ -114,9 +145,11 @@ button:focus-visible{
 /* ===========================
    Header / player cluster
    =========================== */
-header { padding-inline: .75rem; }
+header {
+  padding-inline: .75rem;
+}
 
-#playerCard{
+#playerCard {
   display: flex;
   flex-direction: column;
   background: var(--panel);
@@ -126,7 +159,7 @@ header { padding-inline: .75rem; }
 }
 
 /* Sticky head pattern used across cards */
-.card .head{
+.card .head {
   position: sticky;
   top: 0;
   z-index: 2;
@@ -138,7 +171,7 @@ header { padding-inline: .75rem; }
 /* Player header uses a flex row in RTL.
    We reverse the row so DOM order (right cluster, audio, left cluster)
    naturally places controls on far right & left with audio in center. */
-#playerCard .head{
+#playerCard .head {
   display: flex;
   flex-direction: row-reverse;
   align-items: center;
@@ -146,10 +179,15 @@ header { padding-inline: .75rem; }
 }
 
 /* Clusters (right/left) do not stretch */
-#playerCard .cluster{ flex: 0 0 auto; display: inline-flex; align-items: center; gap: .4rem; }
+#playerCard .cluster {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: .4rem;
+}
 
 /* Center audio stretches but respects min size and shrinks if needed */
-#player{
+#player {
   flex: 1 1 40%;
   min-inline-size: 240px;
   inline-size: 100%;
@@ -159,7 +197,7 @@ header { padding-inline: .75rem; }
 /* ===========================
    Status line
    =========================== */
-#err{
+#err {
   padding-inline: .75rem;
   min-height: 1.25rem;
 }
@@ -167,10 +205,11 @@ header { padding-inline: .75rem; }
 /* ===========================
    Main 3-column panel
    =========================== */
-#panel{
+#panel {
   /* Fill remaining viewport height under header without magic pixels */
   flex: 1 1 auto;
-  min-height: 0; /* allow children to scroll */
+  min-height: 0;
+  /* allow children to scroll */
   display: grid;
   grid-template-columns: var(--w-nav) 6px 1fr 6px var(--w-diff);
   gap: 0;
@@ -179,20 +218,23 @@ header { padding-inline: .75rem; }
 }
 
 /* Cards share look */
-.card{
+.card {
   display: flex;
   flex-direction: column;
-  min-height: 0; /* key to allow .body overflow */
+  min-height: 0;
+  /* key to allow .body overflow */
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: .75rem;
-  overflow: hidden; /* keep sticky head edges crisp */
+  overflow: hidden;
+  /* keep sticky head edges crisp */
   box-shadow: var(--shadow-1);
 }
 
-.card .body{
+.card .body {
   padding: .5rem .6rem;
-  overflow: auto; /* each card scrolls independently */
+  overflow: auto;
+  /* each card scrolls independently */
   min-height: 0;
 }
 
@@ -200,35 +242,37 @@ header { padding-inline: .75rem; }
    [browser] [gutterR] [transcript] [gutterL] [diff] */
 
 /* Gutters for resizing */
-.gutter{
+.gutter {
   background: linear-gradient(to left, transparent, transparent 40%, var(--border) 40%, var(--border) 60%, transparent 60%);
   cursor: col-resize;
   user-select: none;
   outline: none;
 }
-.gutter:focus-visible{
+
+.gutter:focus-visible {
   box-shadow: inset 0 0 0 2px var(--accent);
 }
 
 /* ===========================
    Browser lists
    =========================== */
-#browserGrid{
+#browserGrid {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: .5rem;
   min-height: 0;
 }
 
-#browserGrid .list{
+#browserGrid .list {
   border: 1px dashed var(--border);
   border-radius: .5rem;
   padding: .25rem;
-  overflow: auto; /* independent scroll */
+  overflow: auto;
+  /* independent scroll */
   min-height: 0;
 }
 
-#browserGrid .item{
+#browserGrid .item {
   display: block;
   width: 100%;
   text-align: start;
@@ -236,18 +280,22 @@ header { padding-inline: .75rem; }
   border: 1px solid transparent;
   border-radius: .5rem;
   padding: .35rem .5rem;
-    margin-bottom: 0.25rem;
+  margin-bottom: 0.25rem;
 }
-#browserGrid .item:hover{ background: var(--pill-bg-hover); }
-#browserGrid .item.active{
+
+#browserGrid .item:hover {
+  background: var(--pill-bg-hover);
+}
+
+#browserGrid .item.active {
   border-color: var(--accent);
-  background: rgba(62,166,255,.10);
+  background: rgba(62, 166, 255, .10);
 }
 
 /* ===========================
    Transcript
    =========================== */
-#transcript{
+#transcript {
   white-space: pre-wrap;
   font-size: var(--text-size);
   line-height: 1.5;
@@ -255,24 +303,25 @@ header { padding-inline: .75rem; }
 }
 
 /* Tokens */
-#transcript .word{
+#transcript .word {
   padding-inline: .02em;
   border-radius: .15rem;
 }
-#transcript .word.active{
+
+#transcript .word.active {
   background: var(--active-bg);
 }
 
 /* Confirmed ranges (JS wraps spans in edit preview) */
 #transcript .confirmed,
-#editBox .confirmed{
-  background: rgba(34,197,94,.18);
-  box-shadow: inset 0 0 0 1px rgba(34,197,94,.45);
+#editBox .confirmed {
+  background: rgba(34, 197, 94, .18);
+  box-shadow: inset 0 0 0 1px rgba(34, 197, 94, .45);
   border-radius: .2rem;
 }
 
 /* ContentEditable styling for full edit mode */
-#editBox{
+#editBox {
   background: transparent;
   border: 1px dashed var(--border);
   border-radius: .5rem;
@@ -282,29 +331,41 @@ header { padding-inline: .75rem; }
 /* ===========================
    Diff viewer
    =========================== */
-#diffBody{
+#diffBody {
   font-size: var(--text-size);
   font-family: inherit;
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
 }
-.diff-insert{ background: var(--ins-bg); }
-.diff-delete{ background: var(--del-bg); text-decoration: line-through; }
-.diff-equal{ background: var(--eq-bg); }
+
+.diff-insert {
+  background: var(--ins-bg);
+}
+
+.diff-delete {
+  background: var(--del-bg);
+  text-decoration: line-through;
+}
+
+.diff-equal {
+  background: var(--eq-bg);
+}
 
 /* ===========================
    Floating "back to top" button
    =========================== */
-.fab{
+.fab {
   position: fixed;
-  inset-inline-end: 1rem;  /* RTL-friendly: "end" side */
+  inset-inline-end: 1rem;
+  /* RTL-friendly: "end" side */
   inset-block-end: 1rem;
   z-index: 40;
   width: 42px;
   height: 42px;
   border-radius: 999px;
-  display: none; /* JS toggles */
+  display: none;
+  /* JS toggles */
   background: var(--pill-bg);
   color: var(--pill-fg);
   border: 1px solid var(--border);
@@ -314,16 +375,20 @@ header { padding-inline: .75rem; }
 /* ===========================
    Modal
    =========================== */
-#modal[hidden]{ display: none; }
-#modal{
+#modal[hidden] {
+  display: none;
+}
+
+#modal {
   position: fixed;
   inset: 0;
-  background: rgba(0,0,0,.45);
+  background: rgba(0, 0, 0, .45);
   display: grid;
   place-items: center;
   z-index: 50;
 }
-#modal .modal-content{
+
+#modal .modal-content {
   background: var(--panel);
   color: var(--fg);
   width: min(560px, 92vw);
@@ -333,13 +398,28 @@ header { padding-inline: .75rem; }
   display: grid;
   grid-template-rows: auto 1fr auto;
 }
-.modal-head, .modal-foot{
+
+.modal-head,
+.modal-foot {
   padding: .8rem 1rem;
   border-bottom: 1px solid var(--border);
 }
-.modal-foot{ border-top: 1px solid var(--border); border-bottom: 0; display: flex; gap: .5rem; justify-content: start; }
-.modal-body{ padding: 1rem; display: grid; gap: .6rem; }
-.modal-body input{
+
+.modal-foot {
+  border-top: 1px solid var(--border);
+  border-bottom: 0;
+  display: flex;
+  gap: .5rem;
+  justify-content: start;
+}
+
+.modal-body {
+  padding: 1rem;
+  display: grid;
+  gap: .6rem;
+}
+
+.modal-body input {
   width: 100%;
   padding: .5rem .6rem;
   border-radius: .5rem;
@@ -351,45 +431,58 @@ header { padding-inline: .75rem; }
 /* ===========================
    Scrollbar styling (optional)
    =========================== */
-@media (pointer: fine){
+@media (pointer: fine) {
+
   /* WebKit */
   .card .body::-webkit-scrollbar,
-  #browserGrid .list::-webkit-scrollbar{
-    width: 10px; height: 10px;
+  #browserGrid .list::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
   }
+
   .card .body::-webkit-scrollbar-thumb,
-  #browserGrid .list::-webkit-scrollbar-thumb{
-    background: rgba(128,128,128,.35);
+  #browserGrid .list::-webkit-scrollbar-thumb {
+    background: rgba(128, 128, 128, .35);
     border-radius: 999px;
     border: 2px solid transparent;
     background-clip: padding-box;
   }
+
   .card .body::-webkit-scrollbar-thumb:hover,
-  #browserGrid .list::-webkit-scrollbar-thumb:hover{
-    background: rgba(128,128,128,.55);
+  #browserGrid .list::-webkit-scrollbar-thumb:hover {
+    background: rgba(128, 128, 128, .55);
   }
 }
 
 /* If you ever want to hide scrollbars but keep scrollable behavior, add .no-scrollbar */
-.no-scrollbar{
-  scrollbar-width: none; /* Firefox */
+.no-scrollbar {
+  scrollbar-width: none;
+  /* Firefox */
 }
-.no-scrollbar::-webkit-scrollbar{ display: none; }
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
 
 /* ===========================
    Responsive
    =========================== */
-@media (max-width: 1100px){
-  :root{
+@media (max-width: 1100px) {
+  :root {
     --w-nav: 280px;
     --w-diff: 300px;
   }
 }
-@media (max-width: 900px){
+
+@media (max-width: 900px) {
+
   /* Stack columns vertically when narrow */
-  #panel{
+  #panel {
     grid-template-columns: 1fr;
     gap: .75rem;
   }
-  .gutter{ display: none; }
+
+  .gutter {
+    display: none;
+  }
 }

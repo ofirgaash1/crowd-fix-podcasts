@@ -1,8 +1,8 @@
 // script.js  (ESM)
 
 import DiffMatchPatch from 'https://esm.sh/diff-match-patch@1.0.5';
-import { createClient }  from 'https://esm.sh/@supabase/supabase-js@2';
-import { ungzip }        from 'https://esm.sh/pako@2.1.0';
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { ungzip } from 'https://esm.sh/pako@2.1.0';
 
 /* =========================
    Config / singletons
@@ -56,7 +56,7 @@ const root = document.documentElement;
    State
    ========================= */
 const TOKEN_KEY = 'hfToken';
-const LS_W_NAV  = 'w-nav';
+const LS_W_NAV = 'w-nav';
 const LS_W_DIFF = 'w-diff';
 const LS_TEXTSZ = 'text-size-rem';
 const LS_PROBHL = 'probHL';
@@ -282,7 +282,7 @@ function normalizeBaselineForDiff(baselineTokens) {
 function assignTimesFromAnchors(arr) {
   const isWS = s => /^\s$/u.test(s);
   const isWordKeep = w => w.state === 'keep' && !isWS(w.word) && Number.isFinite(w.start) && Number.isFinite(w.end) && w.end > w.start;
-  const isAnyKeep  = w => w.state === 'keep' && Number.isFinite(w.start) && Number.isFinite(w.end);
+  const isAnyKeep = w => w.state === 'keep' && Number.isFinite(w.start) && Number.isFinite(w.end);
 
   const leftAnchor = (i) => {
     for (let k = i - 1; k >= 0; k--) {
@@ -452,9 +452,9 @@ function tokensToData(tokens) {
     text,
     segments: segs.map(ws => {
       const startsArr = ws.filter(w => Number.isFinite(w.start)).map(w => w.start);
-      const endsArr   = ws.filter(w => Number.isFinite(w.end)).map(w => w.end);
+      const endsArr = ws.filter(w => Number.isFinite(w.end)).map(w => w.end);
       const t0 = startsArr.length ? Math.min(...startsArr) : 0;
-      const t1 = endsArr.length   ? Math.max(...endsArr)   : 0.25;
+      const t1 = endsArr.length ? Math.max(...endsArr) : 0.25;
       return { start: t0, end: t1, text: ws.map(w => w.word).join(''), words: ws };
     })
   };
@@ -494,7 +494,7 @@ function renderDiff() {
   if (!els.diffBody) return;
 
   const base = state.hfBaselineText || '';
-  const cur  = getCurrentPlainText();
+  const cur = getCurrentPlainText();
 
   if (!base) { els.diffBody.textContent = cur; return; }
 
@@ -506,7 +506,7 @@ function renderDiff() {
   DMP.diff_cleanupSemanticLossless(diffs);
 
   els.diffBody.innerHTML = diffs.map(([op, data]) => {
-    if (op === 1)  return `<span class="diff-insert">${utils.escapeHtml(data)}</span>`;
+    if (op === 1) return `<span class="diff-insert">${utils.escapeHtml(data)}</span>`;
     if (op === -1) return `<span class="diff-delete">${utils.escapeHtml(data)}</span>`;
     return `<span class="diff-equal">${utils.escapeHtml(data)}</span>`;
   }).join('');
@@ -566,7 +566,7 @@ function ensureEditUI() {
 
   box.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); commitFullEdit(); }
-    else if (e.key === 'Escape')         { e.preventDefault(); cancelFullEdit(); }
+    else if (e.key === 'Escape') { e.preventDefault(); cancelFullEdit(); }
   });
   box.addEventListener('input', renderDiff);
 
@@ -607,7 +607,7 @@ function getAbsIndexBeforeToken(ti) {
 
 function startFullEditAtTokenIndex(ti, charOffsetInWord) {
   const resume = !els.player.paused && !els.player.ended;
-  try { els.player.pause(); } catch {}
+  try { els.player.pause(); } catch { }
   ensureEditUI();
   const fullText = getFullText();
   state.editingFull = { active: true, resume, original: fullText, caret: 0 };
@@ -628,7 +628,7 @@ function commitFullEdit() {
     state.editingFull = { active: false, resume: false, original: '', caret: 0 };
     state.editBox = null;
     render(); renderDiff(); applyProbHighlights();
-    if (resume && !els.player.ended) { try { els.player.play(); } catch {} }
+    if (resume && !els.player.ended) { try { els.player.play(); } catch { } }
     return;
   }
 
@@ -641,7 +641,7 @@ function commitFullEdit() {
   state.editingFull = { active: false, resume: false, original: '', caret: 0 };
   state.editBox = null;
   render(); renderDiff(); applyProbHighlights();
-  if (resume && !els.player.ended) { try { els.player.play(); } catch {} }
+  if (resume && !els.player.ended) { try { els.player.play(); } catch { } }
 }
 
 function cancelFullEdit() {
@@ -650,7 +650,7 @@ function cancelFullEdit() {
   state.editingFull = { active: false, resume: false, original: '', caret: 0 };
   state.editBox = null;
   render(); renderDiff(); applyProbHighlights();
-  if (resume && !els.player.ended) { try { els.player.play(); } catch {} }
+  if (resume && !els.player.ended) { try { els.player.play(); } catch { } }
 }
 
 /* =========================
@@ -659,7 +659,7 @@ function cancelFullEdit() {
 function extractItems(json) {
   if (Array.isArray(json)) return json;
   if (json && Array.isArray(json.items)) return json.items;
-  if (json && Array.isArray(json.tree))  return json.tree;
+  if (json && Array.isArray(json.tree)) return json.tree;
   if (json && Array.isArray(json.siblings)) return json.siblings;
   return [];
 }
@@ -677,7 +677,7 @@ async function listTree(path = '') {
   const urls = path ? [
     `${base}/${utils.encPath(path)}`,
     `${base}?path=${encodeURIComponent(path)}`
-  ] : [ base, `${base}?recursive=false` ];
+  ] : [base, `${base}?recursive=false`];
   let lastErr = null;
 
   for (const url of urls) {
@@ -935,7 +935,7 @@ function setupPlayerAndControls() {
 
   els.settingsBtn.onclick = () => { els.modal.classList.add('open'); els.hfToken.value = utils.getTok(); };
   els.mClose.onclick = () => els.modal.classList.remove('open');
-  els.mSave.onclick  = () => { utils.setTok(els.hfToken.value.trim()); els.modal.classList.remove('open'); };
+  els.mSave.onclick = () => { utils.setTok(els.hfToken.value.trim()); els.modal.classList.remove('open'); };
   els.mClear.onclick = () => { utils.setTok(''); els.hfToken.value = ''; };
   els.modal.addEventListener('click', (e) => { if (e.target === els.modal) els.modal.classList.remove('open'); });
 
@@ -1010,7 +1010,7 @@ els.transcript.addEventListener('contextmenu', (e) => {
       const r = document.caretRangeFromPoint(e.clientX, e.clientY);
       if (r && el.contains(r.startContainer)) off = r.startOffset;
     }
-  } catch {}
+  } catch { }
   startFullEditAtTokenIndex(ti, off);
 });
 
@@ -1018,7 +1018,7 @@ els.transcript.addEventListener('contextmenu', (e) => {
 document.addEventListener('keydown', (e) => {
   const isZ = (e.code === 'KeyZ');
   const isUndo = (e.ctrlKey || e.metaKey) && isZ && !e.shiftKey;
-  const isRedo = (e.ctrlKey || e.metaKey) && isZ &&  e.shiftKey;
+  const isRedo = (e.ctrlKey || e.metaKey) && isZ && e.shiftKey;
 
   if (isUndo) {
     e.preventDefault();
@@ -1096,8 +1096,8 @@ function validateChronology(tokens) {
    Scroll sync (two-way)
    ========================= */
 function setupScrollSync() {
-  const trScroll   = document.querySelector('#transcriptCard .body') || els.transcript;
-  const diffScroll = document.querySelector('#diffCard .body')       || els.diffBody;
+  const trScroll = document.querySelector('#transcriptCard .body') || els.transcript;
+  const diffScroll = document.querySelector('#diffCard .body') || els.diffBody;
   if (!trScroll || !diffScroll) return;
 
   let lock = 0;
@@ -1123,9 +1123,9 @@ function setupGutters() {
   if (!panel || !gutL || !gutR) return;
 
   // restore saved widths
-  const wNav  = parseFloat(localStorage.getItem(LS_W_NAV));
+  const wNav = parseFloat(localStorage.getItem(LS_W_NAV));
   const wDiff = parseFloat(localStorage.getItem(LS_W_DIFF));
-  if (Number.isFinite(wNav))  panel.style.setProperty('--w-nav',  wNav + 'px');
+  if (Number.isFinite(wNav)) panel.style.setProperty('--w-nav', wNav + 'px');
   if (Number.isFinite(wDiff)) panel.style.setProperty('--w-diff', wDiff + 'px');
 
   let dragging = null;
@@ -1167,7 +1167,7 @@ function setupGutters() {
   function start(which, e) {
     const panelRect = panel.getBoundingClientRect();
     if (which === 'L') {
-      const gutRect  = gutL.getBoundingClientRect();
+      const gutRect = gutL.getBoundingClientRect();
       const diffRect = ($('#diffCard') || panel).getBoundingClientRect();
       dragging = {
         which, panelRect,
@@ -1176,7 +1176,7 @@ function setupGutters() {
       };
     } else {
       const gutRect = gutR.getBoundingClientRect();
-      const brRect  = ($('#browserCard') || panel).getBoundingClientRect();
+      const brRect = ($('#browserCard') || panel).getBoundingClientRect();
       dragging = {
         which, panelRect,
         prevUserSelect: document.body.style.userSelect,
@@ -1201,11 +1201,11 @@ function setupGutters() {
     localStorage.setItem(which === 'L' ? LS_W_DIFF : LS_W_NAV, String(next));
   }
   gutL.addEventListener('keydown', (e) => {
-    if (e.key === 'ArrowLeft')  nudge('L', -10);
+    if (e.key === 'ArrowLeft') nudge('L', -10);
     if (e.key === 'ArrowRight') nudge('L', 10);
   });
   gutR.addEventListener('keydown', (e) => {
-    if (e.key === 'ArrowLeft')  nudge('R', -10);
+    if (e.key === 'ArrowLeft') nudge('R', -10);
     if (e.key === 'ArrowRight') nudge('R', 10);
   });
 }
@@ -1281,7 +1281,7 @@ function init() {
 
   // revoke blob URL on unload
   window.addEventListener('beforeunload', () => {
-    if (state.objUrl) try { URL.revokeObjectURL(state.objUrl); } catch {}
+    if (state.objUrl) try { URL.revokeObjectURL(state.objUrl); } catch { }
   });
 }
 

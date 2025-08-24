@@ -1,5 +1,6 @@
 <!doctype html>
 <html lang="he" dir="rtl">
+
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -8,6 +9,7 @@
   <!-- Link CSS later -->
   <link rel="stylesheet" href="styles.css">
 </head>
+
 <body>
 
   <!-- Top app header: audio player & controls -->
@@ -63,7 +65,8 @@
     </section>
 
     <!-- Gutter between browser & transcript -->
-    <div id="gutterR" class="gutter" role="separator" aria-orientation="vertical" tabindex="0" aria-label="שינוי רוחב הדפדפן"></div>
+    <div id="gutterR" class="gutter" role="separator" aria-orientation="vertical" tabindex="0"
+      aria-label="שינוי רוחב הדפדפן"></div>
 
     <!-- Transcript editor -->
     <section class="card" id="transcriptCard" aria-labelledby="transcriptCardTitle">
@@ -71,7 +74,8 @@
         <h2 id="transcriptCardTitle">תמלול (קליק ימני לעריכה)</h2>
         <div role="group" aria-label="פקדי תמליל">
           <button id="submitBtn" class="pill" type="button" aria-controls="transcript">⬆️ שמור תיקון</button>
-          <button id="probToggle" class="pill" type="button" aria-pressed="false" title="הדגש ודאות נמוכה">הדגש ודאות נמוכה</button>
+          <button id="probToggle" class="pill" type="button" aria-pressed="false" title="הדגש ודאות נמוכה">הדגש ודאות
+            נמוכה</button>
           <button id="fontMinus" class="pill" type="button" aria-controls="transcript" title="הקטן גופן">A−</button>
           <button id="fontPlus" class="pill" type="button" aria-controls="transcript" title="הגדל גופן">A+</button>
           <!-- Confirmation tools (JS will show/hide) -->
@@ -86,7 +90,8 @@
     </section>
 
     <!-- Gutter between transcript & diff -->
-    <div id="gutterL" class="gutter" role="separator" aria-orientation="vertical" tabindex="0" aria-label="שינוי רוחב אזור ההשוואה"></div>
+    <div id="gutterL" class="gutter" role="separator" aria-orientation="vertical" tabindex="0"
+      aria-label="שינוי רוחב אזור ההשוואה"></div>
 
     <!-- Diff viewer -->
     <section class="card" id="diffCard" aria-labelledby="diffCardTitle">
@@ -126,4 +131,5 @@
   <!-- Link JS later -->
   <script type="module" src="script.js"></script>
 </body>
+
 </html>
