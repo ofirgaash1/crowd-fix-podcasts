@@ -283,11 +283,11 @@ header { padding-inline: .75rem; }
    Diff viewer
    =========================== */
 #diffBody{
-  font-family: var(--mono);
+  font-size: var(--text-size);
+  font-family: inherit;
+  line-height: 1.5;
   white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  line-height: 1.7;
-  font-size: .97rem;
+  word-break: break-word;
 }
 .diff-insert{ background: var(--ins-bg); }
 .diff-delete{ background: var(--del-bg); text-decoration: line-through; }
