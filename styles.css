@@ -72,7 +72,6 @@ body{
   direction: rtl;
   display: flex;
   flex-direction: column; /* header on top, main grows */
-  gap: .75rem;
 }
 
 /* Utilities */
@@ -133,7 +132,7 @@ header { padding-inline: .75rem; }
   z-index: 2;
   background: inherit;
   border-bottom: 1px solid var(--border);
-  padding: .6rem .75rem;
+  padding: 0.2rem .75rem;
 }
 
 /* Player header uses a flex row in RTL.
@@ -237,6 +236,7 @@ header { padding-inline: .75rem; }
   border: 1px solid transparent;
   border-radius: .5rem;
   padding: .35rem .5rem;
+    margin-bottom: 0.25rem;
 }
 #browserGrid .item:hover{ background: var(--pill-bg-hover); }
 #browserGrid .item.active{
@@ -250,13 +250,13 @@ header { padding-inline: .75rem; }
 #transcript{
   white-space: pre-wrap;
   font-size: var(--text-size);
-  line-height: 1.8;
+  line-height: 1.5;
   word-break: break-word;
 }
 
 /* Tokens */
 #transcript .word{
-  padding-inline: .05em;
+  padding-inline: .02em;
   border-radius: .15rem;
 }
 #transcript .word.active{
@@ -276,7 +276,6 @@ header { padding-inline: .75rem; }
   background: transparent;
   border: 1px dashed var(--border);
   border-radius: .5rem;
-  padding: .5rem;
   caret-color: var(--accent);
 }
 
