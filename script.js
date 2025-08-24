@@ -59,7 +59,6 @@ const TOKEN_KEY = 'hfToken';
 const LS_W_NAV = 'w-nav';
 const LS_W_DIFF = 'w-diff';
 const LS_TEXTSZ = 'text-size-rem';
-const LS_PROBHL = 'probHL';
 
 const EPS = 1e-3;
 const MIN_WORD_DUR = 0.02;
@@ -75,7 +74,10 @@ const state = {
   wordEls: [],
   starts: [],
   ends: [],
+  absStarts: [],   // NEW: absolute char start per rendered span
+  absEnds: [],     // NEW: absolute char end per rendered span
   lastIdx: -1,
+
 
   // playback / edit
   editingFull: { active: false, resume: false, original: '', caret: 0 },
@@ -98,9 +100,6 @@ const state = {
 
   // prefs
   fontSizeRem: readInitialTextSizeRem(),
-
-  // probability highlighting
-  probEnabled: (localStorage.getItem(LS_PROBHL) ?? 'on') !== 'off',
 
   /* ▼▼ confirmations ▼▼ */
   confirmedMarksRaw: [],   // raw rows from DB (with anchors)
@@ -180,6 +179,19 @@ const utils = {
     return v || fallback;
   },
 
+  paintWordProb(el) {
+    const color = utils.getCssVar('--prob-color', '255,235,59');       // RGB only, no 'rgb()'
+    const baseAlpha = parseFloat(utils.getCssVar('--prob-alpha', '0.6')) || 0.6;
+    const p = parseFloat(el.dataset.prob);
+
+    if (!state.probEnabled || !Number.isFinite(p)) {
+      el.style.backgroundColor = '';
+      return;
+    }
+    const alpha = utils.clamp01((1 - utils.clamp01(p)) * baseAlpha);   // lower prob → stronger
+    el.style.backgroundColor = `rgba(${color}, ${alpha})`;
+  },
+
   encPath: (p) => p.split('/').map(encodeURIComponent).join('/'),
   hfRes: (path, ds) => `https://huggingface.co/datasets/ivrit-ai/${ds}/resolve/main/${utils.encPath(path)}`,
   opusUrl: (p) => utils.hfRes(p, 'audio-v2-opus'),
@@ -213,6 +225,8 @@ const utils = {
     state.wordEls = [];
     state.starts = [];
     state.ends = [];
+    state.absStarts = [];           // NEW
+    state.absEnds = [];             // NEW
     state.lastIdx = -1;
   },
 
@@ -224,7 +238,6 @@ const utils = {
     )),
 
   clamp: (n, lo, hi) => Math.max(lo, Math.min(hi, n)),
-  clamp01: (v) => Math.max(0, Math.min(1, v)),
 
   /* --- added for confirmations / selection / hashing --- */
   sha256: async (text) => {
@@ -430,11 +443,11 @@ const confirm = {
     const yes = document.getElementById('markReliable');
     const no = document.getElementById('markUnreliable');
     if (!yes || !no) return;
-
     const sel = utils.getCurrentSelectionOffsets();
-    if (!sel) { yes.style.display = 'none'; no.style.display = 'none'; return; }
+    if (!sel) { yes.style.display = ''; no.style.display = 'none'; return; }
 
     const frac = confirm.selectionCoverage(sel);
+
     if (frac <= 0) {          // 0% confirmed
       yes.style.display = '';
       no.style.display = 'none';
@@ -980,9 +993,20 @@ function render() {
   utils.clearTranscript();
   const f = document.createDocumentFragment();
 
+  state.absStarts = [];           // NEW
+  state.absEnds = [];             // NEW
+  let absCursor = 0;              // NEW: running absolute char offset
+
   state.currentTokens.forEach((w, ti) => {
     if (w.state === 'del') return;
-    if (w.word === '\n') { f.appendChild(document.createTextNode('\n')); return; }
+
+    if (w.word === '\n') {
+      // count newline in absolute text so confirmations line up
+      f.appendChild(document.createTextNode('\n'));
+      absCursor += 1;            // NEW: advance absolute text by newline
+      return;
+    }
+
 
     const sp = document.createElement('span');
     sp.className = 'word';
@@ -996,6 +1020,12 @@ function render() {
     state.wordEls.push(sp);
     state.starts.push(w.start);
     state.ends.push(w.end);
+
+    // NEW: absolute offsets for this rendered span
+    const len = (w.word || '').length;
+    state.absStarts.push(absCursor);
+    absCursor += len;
+    state.absEnds.push(absCursor);
   });
 
   els.transcript.appendChild(f);
@@ -1044,28 +1074,17 @@ function renderDiff() {
   }).join('');
 }
 
-
 /* =========================
    Probability highlighting
    ========================= */
-
 function applyProbHighlights() {
-  if (!state.wordEls || !state.wordEls.length) return;
-
-  const color = utils.getCssVar('--prob-color', '255,235,59'); // "R,G,B"
-  const baseAlpha = parseFloat(utils.getCssVar('--prob-alpha', '0.6')) || 0.6;
-
-  for (const el of state.wordEls) {
-    const p = parseFloat(el.dataset.prob);
-    if (!state.probEnabled || !Number.isFinite(p)) {
-      el.style.backgroundColor = '';
-      continue;
-    }
-    // 0% → max paint; 100% → no paint
-    const alpha = utils.clamp01((1 - utils.clamp01(p)) * baseAlpha);
-    el.style.backgroundColor = `rgba(${color}, ${alpha})`;
-  }
+  if (!Array.isArray(state.wordEls)) return;
+  for (const el of state.wordEls) utils.paintWordProb(el);
 }
+
+// Legacy hook: if anything calls window.paintWordEl(el), route to the utils painter
+window.paintWordEl = utils.paintWordProb;
+
 
 
 /* =========================
@@ -1073,39 +1092,6 @@ function applyProbHighlights() {
    ========================= */
 
 function getFullText() { return wordsToText(state.currentTokens); }
-
-function placeCaret(container, index) {
-  const range = document.createRange();
-  const sel = window.getSelection();
-  container.textContent = container.textContent; // normalize
-  const textNode = container.firstChild || container;
-  const len = (textNode.textContent || '').length;
-  range.setStart(textNode, Math.max(0, Math.min(len, index)));
-  range.collapse(true);
-  sel.removeAllRanges();
-  sel.addRange(range);
-  container.focus();
-}
-
-function getAbsIndexBeforeToken(ti) {
-  let off = 0;
-  for (let i = 0; i < ti; i++) {
-    if (state.currentTokens[i].state !== 'del') off += (state.currentTokens[i].word || '').length;
-  }
-  return off;
-}
-
-function startFullEditAtTokenIndex(ti, charOffsetInWord) {
-  const resume = !els.player.paused && !els.player.ended;
-  try { els.player.pause(); } catch { }
-  ensureEditUI();
-  const fullText = getFullText();
-  state.editingFull = { active: true, resume, original: fullText, caret: 0 };
-  state.editBox.textContent = fullText;
-
-  const caretPos = getAbsIndexBeforeToken(ti) + Math.min(charOffsetInWord, (state.currentTokens[ti].word || '').length);
-  requestAnimationFrame(() => placeCaret(state.editBox, caretPos));
-}
 
 function snapshot() { return JSON.parse(JSON.stringify(state.currentTokens)); }
 
@@ -1457,9 +1443,10 @@ function setupPlayerAndControls() {
   // probability toggle
   const probBtn = els.probToggle;
   if (probBtn) {
+    probBtn.setAttribute('aria-pressed', String(state.probEnabled));
     function setProbUI() {
-      probBtn.setAttribute('aria-pressed', String(state.probEnabled));
-      probBtn.textContent = state.probEnabled ? 'בטל הדגשה' : 'הדגש ודאות נמוכה';
+
+      probBtn.textContent = state.probEnabled ? 'בטל הדגשת ודאות נמוכה' : 'הדגש ודאות נמוכה';
     }
     setProbUI();
 
@@ -1467,7 +1454,8 @@ function setupPlayerAndControls() {
       state.probEnabled = !state.probEnabled;
       localStorage.setItem('probHL', state.probEnabled ? 'on' : 'off');
       setProbUI();
-      applyProbHighlights();
+      applyProbHighlights();           // repaint with the unified painter
+      confirm?.applyHighlights?.();    // if your confirm layer repaints/imposes styles
     });
   }
 
@@ -1559,7 +1547,6 @@ function tick() {
   if (i >= 0 && i < state.starts.length) {
     const inRange = (t >= state.starts[i] && t <= state.ends[i]);
     if (!inRange) {
-      // try neighbor
       const next = i + (t > state.ends[i] ? 1 : -1);
       if (next >= 0 && next < state.starts.length && t >= state.starts[next] && t <= state.ends[next]) {
         i = next;
@@ -1572,15 +1559,29 @@ function tick() {
   }
   if (i === state.lastIdx) return;
 
-  if (state.lastIdx >= 0) state.wordEls[state.lastIdx]?.classList.remove('active');
+  // clear previous
+  if (state.lastIdx >= 0) {
+    const prevEl = state.wordEls[state.lastIdx];
+    prevEl?.classList.remove('active', 'confirmed-active');   // <— also remove the new class
+  }
+
+  // set new
   if (i >= 0) {
     const el = state.wordEls[i];
     el?.classList.add('active');
-    // active-word auto-scroll (keep visible)
+
+    // NEW: if this span intersects any confirmed range -> add 'confirmed-active'
+    const sAbs = state.absStarts[i] ?? -1;
+    const eAbs = state.absEnds[i] ?? -1;
+    const hit = Array.isArray(state.confirmedRanges) && state.confirmedRanges.some(({ range: [a, b] }) => !(eAbs <= a || sAbs >= b));
+    if (hit) el?.classList.add('confirmed-active');
+
+    // keep visible
     el?.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
   }
   state.lastIdx = i;
 }
+
 
 /* transcript interactions */
 // Alt+click a word to seek to its start (so normal clicks stay for editing)
