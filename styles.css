@@ -287,7 +287,14 @@ header {
 
 /* Gutters for resizing */
 .gutter {
-  background: linear-gradient(to left, transparent, transparent 40%, var(--border) 40%, var(--border) 60%, transparent 60%);
+  background: linear-gradient(
+    to left,
+    transparent,
+    transparent 35%,
+    var(--border) 30%,   /* start border earlier */
+    var(--border) 70%,   /* end border later */
+    transparent 65%
+  );
   cursor: col-resize;
   user-select: none;
   outline: none;

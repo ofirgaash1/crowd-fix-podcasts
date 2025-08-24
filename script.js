@@ -1552,9 +1552,9 @@ function setupGutters() {
       // left gutter controls DIFF width
       let newW;
       if (dragging.diffIsLeftOfGutter) {
-        newW = clamp(x - dragging.panelRect.left, 220, 640);
+        newW = clamp(x - dragging.panelRect.left, 3, 640);
       } else {
-        newW = clamp(dragging.panelRect.right - x, 220, 640);
+        newW = clamp(dragging.panelRect.right - x, 3, 640);
       }
       panel.style.setProperty('--w-diff', newW + 'px');
       localStorage.setItem(LS_W_DIFF, String(newW));
@@ -1562,9 +1562,9 @@ function setupGutters() {
       // right gutter controls NAV width
       let newW;
       if (dragging.browserIsRightOfGutter) {
-        newW = clamp(dragging.panelRect.right - x, 240, 680);
+        newW = clamp(dragging.panelRect.right - x, 3, 680);
       } else {
-        newW = clamp(x - dragging.panelRect.left, 240, 680);
+        newW = clamp(x - dragging.panelRect.left, 3, 680);
       }
       panel.style.setProperty('--w-nav', newW + 'px');
       localStorage.setItem(LS_W_NAV, String(newW));
