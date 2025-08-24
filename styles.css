@@ -23,6 +23,7 @@
   --border: #e5e7eb;      /* dividers */
 
   --pill-bg: #f1f5f9;
+  --save-bg:  #daf8c1;
   --pill-fg: #0f172a;
   --pill-bg-hover: #e2e8f0;
 
@@ -55,6 +56,7 @@ html.theme-dark{
   --pill-bg-hover: #333333;
   --hint: #9aa3af;
   --accent: #38bdf8;
+  --save-bg: #003f05;
 }
 
 html {
@@ -183,6 +185,9 @@ button:focus-visible {
   border: 1px solid var(--border);
 }
 
+.save {
+  background: var(--save-bg);
+}
 /* ===========================
    Header / player cluster
    =========================== */
