@@ -106,12 +106,61 @@ const state = {
   confirmedMarksRaw: [],   // raw rows from DB (with anchors)
   confirmedRanges: [],     // [{id, range:[start,end]}] mapped to current text
 
+  // mode-less editing flags
+  modelessPending: false,
+  modelessComposing: false,
+
+  // probability highlight toggle (persisted)
+  probEnabled: (localStorage.getItem('probHL') ?? 'on') !== 'off',
 };
 
 /* =========================
    Utils
    ========================= */
 const utils = {
+  // --- caret/selection helpers for a contentEditable container ---
+  plainText(node) {
+    // innerText preserves \n on line breaks, closer to user-visible text
+    return (node?.innerText || '').replace(/\r/g, '');
+  },
+  getSelectionOffsets(container) {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return null;
+    const r = sel.getRangeAt(0);
+    const inC = n => n && (n === container || container.contains(n));
+    if (!(inC(r.startContainer) && inC(r.endContainer))) return null;
+
+    const measure = (node, off) => {
+      const rng = document.createRange();
+      rng.selectNodeContents(container);
+      try { rng.setEnd(node, off); } catch { return 0; }
+      return rng.toString().length;
+    };
+    const s = measure(r.startContainer, r.startOffset);
+    const e = measure(r.endContainer, r.endOffset);
+    return [Math.min(s, e), Math.max(s, e)];
+  },
+  setSelectionByOffsets(container, start, end) {
+    const text = utils.plainText(container);
+    const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+    const S = clamp(start || 0, 0, text.length);
+    const E = clamp((end == null ? S : end), 0, text.length);
+
+    const tw = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null);
+    let pos = 0, n, sNode = container, sOff = 0, eNode = container, eOff = 0;
+    while ((n = tw.nextNode())) {
+      const len = n.nodeValue.length;
+      if (pos + len >= S && sNode === container) { sNode = n; sOff = S - pos; }
+      if (pos + len >= E) { eNode = n; eOff = E - pos; break; }
+      pos += len;
+    }
+    const sel = window.getSelection();
+    const rng = document.createRange();
+    try { rng.setStart(sNode, sOff); rng.setEnd(eNode, eOff); } catch { return; }
+    sel.removeAllRanges(); sel.addRange(rng);
+    container.focus();
+  },
+
   getTok: () => localStorage.getItem(TOKEN_KEY) || '',
   setTok: (t) => t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY),
 
@@ -120,6 +169,11 @@ const utils = {
       const h = new URL(u).host;
       return h.endsWith('huggingface.co') || h.endsWith('hf.co');
     } catch { return false; }
+  },
+
+  getCssVar(name, fallback = '') {
+    const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return v || fallback;
   },
 
   encPath: (p) => p.split('/').map(encodeURIComponent).join('/'),
@@ -771,6 +825,49 @@ function tokensToData(tokens) {
 }
 
 /* =========================
+   Mode-less editing rebuild
+   ========================= */
+function requestRebuildFromTranscript() {
+  if (state.modelessComposing) return;      // wait for IME to finish
+  if (state.modelessPending) return;
+  state.modelessPending = true;
+  requestAnimationFrame(() => {
+    state.modelessPending = false;
+    rebuildFromTranscriptNow();
+  });
+}
+
+function rebuildFromTranscriptNow() {
+  const el = els.transcript;
+  if (!el) return;
+
+  // 1) capture selection + new plain text
+  const sel = utils.getSelectionOffsets(el);
+  const newText = utils.plainText(el);
+
+  // 2) rebuild tokens & data from baseline
+  try {
+    state.undoStack.push(JSON.parse(JSON.stringify(state.currentTokens)));
+    state.redoStack.length = 0;
+    state.currentTokens = buildFromBaseline(state.baselineTokens, newText);
+    state.data = tokensToData(state.currentTokens);
+  } catch (err) {
+    console.error('rebuildFromTranscript failed:', err);
+    return;
+  }
+
+  // 3) re-render & re-apply visuals
+  render();
+  renderDiff?.();
+  applyProbHighlights?.();
+  confirm.applyHighlights?.();
+  confirm.updateButtons?.();
+
+  // 4) restore selection
+  if (sel) utils.setSelectionByOffsets(el, sel[0], sel[1]);
+}
+
+/* =========================
    Rendering & Diff
    ========================= */
 function render() {
@@ -797,9 +894,9 @@ function render() {
   });
 
   els.transcript.appendChild(f);
-  applyProbHighlights(); // paint (or clear) based on toggle
-  confirm.applyHighlights();
-  confirm.updateButtons();
+  applyProbHighlights();
+  confirm.applyHighlights?.();
+  confirm.updateButtons?.();
 }
 
 function renderDiff() {
@@ -834,14 +931,12 @@ function getCurrentPlainText() {
 /* =========================
    Probability highlighting
    ========================= */
-function getCssVar(name, fallback = '') {
-  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-  return v || fallback;
-}
 
 function applyProbHighlights() {
-  const color = getCssVar('--prob-color', '255,235,59'); // RGB
-  const baseAlpha = parseFloat(getCssVar('--prob-alpha', '0.6')) || 0.6;
+  if (!state.wordEls || !state.wordEls.length) return;
+
+  const color = utils.getCssVar('--prob-color', '255,235,59'); // "R,G,B"
+  const baseAlpha = parseFloat(utils.getCssVar('--prob-alpha', '0.6')) || 0.6;
 
   for (const el of state.wordEls) {
     const p = parseFloat(el.dataset.prob);
@@ -849,63 +944,16 @@ function applyProbHighlights() {
       el.style.backgroundColor = '';
       continue;
     }
-    // 0% prob → max highlight; 100% → no highlight (alpha scales with (1-p))
+    // 0% → max paint; 100% → no paint
     const alpha = utils.clamp01((1 - utils.clamp01(p)) * baseAlpha);
     el.style.backgroundColor = `rgba(${color}, ${alpha})`;
   }
 }
 
+
 /* =========================
    Edit mode
    ========================= */
-function ensureEditUI() {
-  if (state.editBox) return;
-
-  const box = document.createElement('div');
-  box.id = 'editBox';
-  box.contentEditable = 'true';
-  box.spellcheck = false;
-  box.className = 'transcript';
-  Object.assign(box.style, {
-    minHeight: '40vh',
-    outline: 'none',
-    fontSize: getComputedStyle(els.transcript).fontSize
-  });
-
-  els.transcript.innerHTML = '';
-  els.transcript.appendChild(box);
-  state.editBox = box;
-
-  // ENTER commits, ESC cancels
-  box.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); commitFullEdit(); }
-    else if (e.key === 'Escape') { e.preventDefault(); cancelFullEdit(); }
-  });
-
-  // Keep diff + confirmation preview + buttons in sync while typing
-  box.addEventListener('input', () => {
-    renderDiff();
-    // confirmed green overlay inside edit box
-    (typeof confirm !== 'undefined' && confirm?.applyEditPreview) && confirm.applyEditPreview();
-    // buttons (mark reliable / unreliable) visibility
-    (typeof confirm !== 'undefined' && confirm?.updateButtons) && confirm.updateButtons();
-  });
-
-  // One-time global: left-click outside transcript commits (but ignore clicks on the transcript header strip)
-  if (!ensureEditUI._outsideBound) {
-    document.addEventListener('mousedown', (e) => {
-      if (e.button !== 0) return;
-      if (!(state.editingFull.active && state.editBox)) return;
-      const t = e.target;
-      if (els.transcript.contains(t)) return;                  // click inside edit area → ignore
-      if (t.closest('#transcriptCard .head')) return;          // click on transcript toolbar → ignore
-      e.preventDefault();
-      commitFullEdit();
-    }, true);
-    ensureEditUI._outsideBound = true;
-  }
-}
-
 
 function getFullText() { return wordsToText(state.currentTokens); }
 
@@ -944,84 +992,6 @@ function startFullEditAtTokenIndex(ti, charOffsetInWord) {
 
 function snapshot() { return JSON.parse(JSON.stringify(state.currentTokens)); }
 
-function commitFullEdit() {
-  if (!state.editingFull.active) return;
-  const resume = !!state.editingFull.resume;
-
-  const newText = (state.editBox?.innerText || '').replace(/\r/g, '');
-  if (newText === (state.editingFull.original || '')) {
-    state.editingFull = { active: false, resume: false, original: '', caret: 0 };
-    state.editBox = null;
-    render();
-    renderDiff();
-    // confirmations
-    (typeof confirm !== 'undefined' && confirm?.applyHighlights) && confirm.applyHighlights();
-    (typeof confirm !== 'undefined' && confirm?.applyEditPreview) && confirm.applyEditPreview();
-    (typeof confirm !== 'undefined' && confirm?.updateButtons) && confirm.updateButtons();
-    // probability repaint (whichever function name you currently have)
-    if (typeof window.applyProbStyles === 'function') window.applyProbStyles();
-    else if (typeof window.applyProbHighlights === 'function') window.applyProbHighlights();
-    if (resume && !els.player.ended) { try { els.player.play(); } catch { } }
-    return;
-  }
-
-  // Save state for undo before applying change
-  state.undoStack.push(JSON.parse(JSON.stringify(state.currentTokens)));
-  state.redoStack = [];
-
-  // Rebuild tokens from baseline using LCS (if available), else fallback to naive rebuild
-  if (typeof buildFromBaseline === 'function') {
-    state.currentTokens = buildFromBaseline(state.baselineTokens, newText);
-  } else {
-    // Fallback – simple tokens -> data (keeps text, loses precise alignment)
-    const toks = [];
-    for (const ch of Array.from(newText)) toks.push({ word: ch, start: NaN, end: NaN, state: 'ins', probability: NaN });
-    state.currentTokens = toks;
-  }
-
-  // Ensure chronology and rebuild data structure
-  repairChronology(state.currentTokens);
-  state.data = tokensToData(state.currentTokens);
-
-  // Exit edit mode
-  state.editingFull = { active: false, resume: false, original: '', caret: 0 };
-  state.editBox = null;
-
-  // Re-render everything
-  render();
-  renderDiff();
-  (typeof confirm !== 'undefined' && confirm?.applyHighlights) && confirm.applyHighlights();
-  (typeof confirm !== 'undefined' && confirm?.applyEditPreview) && confirm.applyEditPreview();
-  (typeof confirm !== 'undefined' && confirm?.updateButtons) && confirm.updateButtons();
-  // refresh confirmations from DB (reattach to new text)
-  (typeof confirm !== 'undefined' && confirm?.refreshForCurrentFile) && confirm.refreshForCurrentFile().catch(console.error);
-
-  // probability repaint
-  if (typeof window.applyProbStyles === 'function') window.applyProbStyles();
-  else if (typeof window.applyProbHighlights === 'function') window.applyProbHighlights();
-
-  if (resume && !els.player.ended) { try { els.player.play(); } catch { } }
-}
-
-
-function cancelFullEdit() {
-  if (!state.editingFull.active) return;
-  const resume = state.editingFull.resume;
-
-  state.editingFull = { active: false, resume: false, original: '', caret: 0 };
-  state.editBox = null;
-
-  render();
-  renderDiff();
-  (typeof confirm !== 'undefined' && confirm?.applyHighlights) && confirm.applyHighlights();
-  (typeof confirm !== 'undefined' && confirm?.applyEditPreview) && confirm.applyEditPreview();
-  (typeof confirm !== 'undefined' && confirm?.updateButtons) && confirm.updateButtons();
-
-  if (typeof window.applyProbStyles === 'function') window.applyProbStyles();
-  else if (typeof window.applyProbHighlights === 'function') window.applyProbHighlights();
-
-  if (resume && !els.player.ended) { try { els.player.play(); } catch { } }
-}
 
 
 /* =========================
@@ -1288,6 +1258,52 @@ function buildJson() {
 }
 
 /* =========================
+   UI Functions
+   ========================= */
+const ui = {
+  _pendingRebuild: false,
+  _composing: false,
+
+  requestRebuildFromTranscript() {
+    if (ui._composing) return;         // defer until composition ends
+    if (ui._pendingRebuild) return;
+    ui._pendingRebuild = true;
+    requestAnimationFrame(() => {
+      ui._pendingRebuild = false;
+      ui.rebuildFromTranscriptNow();
+    });
+  },
+
+  rebuildFromTranscriptNow() {
+    const el = els?.transcript || els?.transcript;
+    if (!el) return;
+
+    // 1) read current plain text + selection
+    const beforeSel = utils.getSelectionOffsets(el);
+    const newText = utils.plainText(el);
+
+    // 2) rebuild tokens against baseline
+    try {
+      state.undoStack.push(handlers.snapshot());
+      state.redoStack.length = 0;
+      state.currentTokens = dataProcessing.buildFromBaseline(state.baselineTokens, newText);
+      state.data = dataProcessing.tokensToData(state.currentTokens);
+    } catch (err) {
+      console.error('rebuildFromTranscript failed:', err);
+      return;
+    }
+
+    // 3) re-render spans and highlights
+    render();            // rebuild <span class="word">
+    renderDiff?.();      // optional: keep diff live
+    probHighlight?.apply?.();
+    applyConfirmationHighlights?.();
+
+    // 4) restore selection
+    if (beforeSel) utils.setSelectionByOffsets(el, beforeSel[0], beforeSel[1]);
+  },
+};
+/* =========================
    UI behaviors
    ========================= */
 function readInitialTextSizeRem() {
@@ -1320,6 +1336,23 @@ function setupPlayerAndControls() {
 
   els.fontPlus.onclick = () => { state.fontSizeRem = Math.min(state.fontSizeRem + 0.10, 2.00); applyFontSize(); };
   els.fontMinus.onclick = () => { state.fontSizeRem = Math.max(state.fontSizeRem - 0.10, 0.60); applyFontSize(); };
+
+  // probability toggle
+  const probBtn = els.probToggle;
+  if (probBtn) {
+    function setProbUI() {
+      probBtn.setAttribute('aria-pressed', String(state.probEnabled));
+      probBtn.textContent = state.probEnabled ? 'בטל הדגשה' : 'הדגש ודאות נמוכה';
+    }
+    setProbUI();
+
+    probBtn.addEventListener('click', () => {
+      state.probEnabled = !state.probEnabled;
+      localStorage.setItem('probHL', state.probEnabled ? 'on' : 'off');
+      setProbUI();
+      applyProbHighlights();
+    });
+  }
 
   // open -> focus the token input
   els.settingsBtn?.addEventListener('click', () => {
@@ -1405,10 +1438,28 @@ function tick() {
 }
 
 /* transcript interactions */
+// Alt+Click seeks; normal click is for caret/typing
 els.transcript.addEventListener('click', (e) => {
-  const el = e.target.closest('.word'); if (!el || el.classList.contains('deleted')) return;
-  const t = +el.dataset.start;
-  if (!state.editingFull.active) { els.player.currentTime = t + .01; els.player.play(); }
+  const wordEl = e.target.closest('.word');
+  if (!wordEl) return;
+  if (e.altKey) {
+    e.preventDefault();
+    e.stopPropagation();
+    const t = +wordEl.dataset.start;
+    if (Number.isFinite(t)) {
+      els.player.currentTime = t + 0.01;
+      els.player.play();
+    }
+  }
+});
+// IME-safe composition gating
+els.transcript.addEventListener('compositionstart', () => { ui._composing = true; });
+els.transcript.addEventListener('compositionend', () => { ui._composing = false; ui.requestRebuildFromTranscript(); });
+
+// Rebuild only on real text changes
+els.transcript.addEventListener('input', (e) => {
+  // Only handle text-affecting inputs; ignore pure selection changes
+  ui.requestRebuildFromTranscript();
 });
 els.transcript.addEventListener('contextmenu', (e) => {
   e.preventDefault();

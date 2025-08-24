@@ -27,7 +27,8 @@
               קליק ימני לעריכת הטקסט · Enter לשמירה · Esc לביטול · Ctrl+Z לביטול · Ctrl+Shift+Z לשחזור
             </div>
           </details>
-          <button id="settingsBtn" type="button" aria-haspopup="dialog" aria-controls="modal" title="הגדרות">⚙️ צדיק, הזנת טוקן?</button>
+          <button id="settingsBtn" type="button" aria-haspopup="dialog" aria-controls="modal" title="הגדרות">⚙️ צדיק,
+            הזנת טוקן?</button>
 
           <button class="pill" id="dlVtt" type="button" title="הורד VTT" aria-label="הורד VTT">⬇️ VTT</button>
           <button id="themeToggle" class="theme-toggle" aria-label="Toggle dark mode"> <span id="themeIcon"
@@ -75,7 +76,7 @@
       <div class="head">
         <h2 id="transcriptCardTitle">תמלול</h2>
         <div class="actions" role="group" aria-label="פקדי תמליל">
-          <button id="submitBtn" class="pill" type="button" aria-controls="transcript">⬆️ שמור תיקון</button>
+          <button id="submitBtn" class="pill save" type="button" aria-controls="transcript">⬆️ שמור תיקון</button>
           <button id="probToggle" class="pill" type="button" aria-pressed="false" title="הדגש ודאות נמוכה">הדגש ודאות
             נמוכה</button>
           <button id="fontMinus" class="pill" type="button" aria-controls="transcript" title="הקטן גופן">A−</button>
@@ -87,7 +88,8 @@
       </div>
 
       <div class="body">
-        <div id="transcript" class="transcript" dir="auto" aria-label="תצוגת התמליל לעריכה"></div>
+        <div id="transcript" class="transcript" dir="auto" contenteditable="true" aria-label="תצוגת התמליל לעריכה">
+        </div>
       </div>
     </section>
 
