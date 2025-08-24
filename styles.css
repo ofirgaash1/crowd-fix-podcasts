@@ -192,6 +192,26 @@ header {
   padding: 0.2rem .75rem;
 }
 
+/* Transcript head: keep in one row */
+#transcriptCard .head{
+  display:flex;
+  align-items:center;
+  gap:.4rem;                 /* tiny horizontal gap */
+  justify-content:space-between;
+}
+.head h2{
+  font-weight:600;
+  font-size:1.5rem;            /* modest size to save height */
+  line-height:0;
+}
+#transcriptCard .head .actions{
+  display:flex;
+  align-items:center;
+  gap:.35rem;
+  margin-inline-start:auto;  /* push buttons to the opposite edge in RTL */
+  flex-wrap:wrap;            /* avoid wrapping entire head to 2nd line */
+}
+
 /* Player header uses a flex row in RTL.
    We reverse the row so DOM order (right cluster, audio, left cluster)
    naturally places controls on far right & left with audio in center. */

@@ -452,7 +452,7 @@ const confirm = {
     });
 
     document.addEventListener('selectionchange', confirm.updateButtons);
-    elements.transcript.addEventListener('mouseup', confirm.updateButtons);
+    els.transcript.addEventListener('mouseup', confirm.updateButtons);
   },
 
   /* ---- refresh (call after load or text changes) ---- */
