@@ -112,6 +112,10 @@ const state = {
 
   // probability highlight toggle (persisted)
   probEnabled: (localStorage.getItem('probHL') ?? 'on') !== 'off',
+
+  // modeless editing helpers
+  _undoGuard: false,        // throttles undo snapshots during typing
+  _pendingCaret: null,      // absolute caret offset to restore after re-render
 };
 
 /* =========================
@@ -868,6 +872,107 @@ function rebuildFromTranscriptNow() {
 }
 
 /* =========================
+   Modeless editing helpers
+   ========================= */
+
+// Extract plain text from #transcript (preserves \n you insert between segments)
+function transcriptPlainText() {
+  const tw = document.createTreeWalker(els.transcript, NodeFilter.SHOW_TEXT, null);
+  let s = '', n;
+  while ((n = tw.nextNode())) s += n.nodeValue;
+  return s.replace(/\r/g, '');
+}
+
+// Absolute offsets of current selection inside #transcript.
+// Returns [start, end] or null if selection is outside the transcript.
+function getSelectionOffsetsInTranscript() {
+  const sel = window.getSelection?.();
+  if (!sel || sel.rangeCount === 0) return null;
+  const r = sel.getRangeAt(0);
+  const inC = (node) => node && (node === els.transcript || els.transcript.contains(node));
+  if (!(inC(r.startContainer) || inC(r.endContainer))) return null;
+
+  const probe = document.createRange();
+  probe.selectNodeContents(els.transcript);
+
+  const toAbs = (node, off) => {
+    try { probe.setEnd(node, off); } catch { return 0; }
+    return probe.toString().length;
+  };
+
+  const s = toAbs(r.startContainer, r.startOffset);
+  const e = toAbs(r.endContainer, r.endOffset);
+  return s === e ? [s, s] : [Math.min(s, e), Math.max(s, e)];
+}
+
+// Map absolute offset -> DOM position after we re-render.
+function domPosAtOffset(container, absOffset) {
+  const text = (() => {
+    const tw = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null);
+    let s = '', n;
+    while ((n = tw.nextNode())) s += n.nodeValue;
+    return s;
+  })();
+  const target = Math.max(0, Math.min(absOffset, text.length));
+  const tw = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null);
+  let node, count = 0;
+  while ((node = tw.nextNode())) {
+    const len = node.nodeValue.length;
+    if (count + len >= target) return [node, target - count];
+    count += len;
+  }
+  const last = container.lastChild;
+  return (last && last.nodeType === Node.TEXT_NODE)
+    ? [last, last.nodeValue.length]
+    : [container, (container.textContent || '').length];
+}
+
+function placeCaretInTranscript(absOffset) {
+  const [node, off] = domPosAtOffset(els.transcript, absOffset);
+  const sel = window.getSelection();
+  const range = document.createRange();
+  try {
+    range.setStart(node, off);
+    range.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(range);
+  } catch { /* ignore */ }
+  els.transcript.focus();
+}
+
+// Apply user edits live: read text from DOM, diff vs baseline, rebuild tokens, render, restore caret, update diff
+function handleLiveEdit() {
+  const newText = transcriptPlainText();
+  const curText = wordsToText(state.currentTokens.filter(t => t.state !== 'del'));
+  if (newText === curText) return;
+
+  // coalesce undo snapshots while typing
+  if (!state._undoGuard) {
+    state.undoStack.push(snapshot());
+    state.redoStack = [];
+    state._undoGuard = true;
+    setTimeout(() => { state._undoGuard = false; }, 400);
+  }
+
+  // rebuild from baseline and re-render
+  state.currentTokens = buildFromBaseline(state.baselineTokens, newText);
+  state.data = tokensToData(state.currentTokens);
+
+  // we captured desired caret position earlier into state._pendingCaret
+  const restoreTo = state._pendingCaret;
+
+  render();
+  renderDiff();
+  confirm?.applyHighlights?.();
+  confirm?.updateButtons?.();
+
+  if (Number.isFinite(restoreTo)) {
+    // restore after the new DOM is in place
+    requestAnimationFrame(() => placeCaretInTranscript(restoreTo));
+  }
+}
+
+/* =========================
    Rendering & Diff
    ========================= */
 function render() {
@@ -894,19 +999,37 @@ function render() {
   });
 
   els.transcript.appendChild(f);
-  applyProbHighlights();
+  applyProbHighlights(); // paint (or clear) based on toggle
   confirm.applyHighlights?.();
   confirm.updateButtons?.();
 }
 
-function renderDiff() {
-  if (!els.diffBody) return;
+function getCurrentPlainText() {
+  // If we’re editing, read exactly what’s in the edit box (including newlines).
+  if (state.editBox && state.editingFull.active) {
+    // Walk text nodes to avoid accidental HTML side-effects
+    const tw = document.createTreeWalker(state.editBox, NodeFilter.SHOW_TEXT, null);
+    let s = '', n;
+    while ((n = tw.nextNode())) s += n.nodeValue;
+    return s.replace(/\r/g, '');
+  }
+  // Otherwise, rebuild from tokens (ignoring deleted tokens)
+  return wordsToText(state.currentTokens.filter(t => t.state !== 'del'));
+}
 
+function renderDiff() {
   const base = state.hfBaselineText || '';
   const cur = getCurrentPlainText();
 
-  if (!base) { els.diffBody.textContent = cur; return; }
+  if (!els.diffBody) return;
 
+  if (!base) {
+    // No baseline → just mirror current text
+    els.diffBody.textContent = cur;
+    return;
+  }
+
+  // tweak boundaries toward punctuation/whitespace
   DMP.Diff_Timeout = 2;
   DMP.Diff_EditCost = 8;
 
@@ -921,12 +1044,6 @@ function renderDiff() {
   }).join('');
 }
 
-function getCurrentPlainText() {
-  if (state.editBox && state.editingFull.active) {
-    return (state.editBox.innerText || '').replace(/\r/g, '');
-  }
-  return wordsToText(state.currentTokens.filter(t => t.state !== 'del'));
-}
 
 /* =========================
    Probability highlighting
@@ -1354,6 +1471,34 @@ function setupPlayerAndControls() {
     });
   }
 
+  // ===== Modeless editing setup =====
+  if (els.transcript) {
+    // prefer plaintext-only if supported; otherwise fallback to true
+    try { els.transcript.setAttribute('contenteditable', 'plaintext-only'); }
+    catch { els.transcript.setAttribute('contenteditable', 'true'); }
+
+    // keep default typing caret, avoid blue selection inversion from .word styles
+    els.transcript.style.caretColor = 'var(--accent)';
+
+    // capture caret BEFORE browser mutates DOM so we can restore after re-render
+    els.transcript.addEventListener('beforeinput', () => {
+      const sel = getSelectionOffsetsInTranscript();
+      state._pendingCaret = sel ? sel[0] : null;
+    });
+
+    // every change → rebuild tokens & refresh diff
+    els.transcript.addEventListener('input', () => {
+      handleLiveEdit();
+    });
+
+    // keep confirm toolbar state fresh as user changes selection
+    ['keyup', 'mouseup'].forEach(ev =>
+      els.transcript.addEventListener(ev, () => {
+        confirm?.updateButtons?.();
+      })
+    );
+  }
+
   // open -> focus the token input
   els.settingsBtn?.addEventListener('click', () => {
     els.modal.classList.add('open');
@@ -1438,18 +1583,16 @@ function tick() {
 }
 
 /* transcript interactions */
-// Alt+Click seeks; normal click is for caret/typing
+// Alt+click a word to seek to its start (so normal clicks stay for editing)
 els.transcript.addEventListener('click', (e) => {
-  const wordEl = e.target.closest('.word');
-  if (!wordEl) return;
-  if (e.altKey) {
+  if (!e.altKey) return;
+  const el = e.target.closest('.word');
+  if (!el) return;
+  const t = +el.dataset.start;
+  if (Number.isFinite(t)) {
+    els.player.currentTime = t + .01;
+    try { els.player.play(); } catch { }
     e.preventDefault();
-    e.stopPropagation();
-    const t = +wordEl.dataset.start;
-    if (Number.isFinite(t)) {
-      els.player.currentTime = t + 0.01;
-      els.player.play();
-    }
   }
 });
 // IME-safe composition gating
@@ -1460,22 +1603,6 @@ els.transcript.addEventListener('compositionend', () => { ui._composing = false;
 els.transcript.addEventListener('input', (e) => {
   // Only handle text-affecting inputs; ignore pure selection changes
   ui.requestRebuildFromTranscript();
-});
-els.transcript.addEventListener('contextmenu', (e) => {
-  e.preventDefault();
-  const el = e.target.closest('.word'); if (!el) return;
-  const ti = +el.dataset.ti;
-  let off = el.textContent.length;
-  try {
-    if (document.caretPositionFromPoint) {
-      const pos = document.caretPositionFromPoint(e.clientX, e.clientY);
-      if (pos && el.contains(pos.offsetNode)) off = pos.offset;
-    } else if (document.caretRangeFromPoint) {
-      const r = document.caretRangeFromPoint(e.clientX, e.clientY);
-      if (r && el.contains(r.startContainer)) off = r.startOffset;
-    }
-  } catch { }
-  startFullEditAtTokenIndex(ti, off);
 });
 
 /* Undo/redo */
