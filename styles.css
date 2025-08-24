@@ -404,12 +404,15 @@ header {
   font-size: var(--text-size);
   line-height: 1.5;
   word-break: break-word;
+  unicode-bidi: isolate;
 }
 
 /* Tokens */
 #transcript .word {
   padding-inline: .02em;
   border-radius: .15rem;
+  direction: inherit;
+  unicode-bidi: normal;
 }
 
 #transcript .word.active {

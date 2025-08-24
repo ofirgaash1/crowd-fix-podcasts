@@ -115,6 +115,11 @@ const state = {
   // modeless editing helpers
   _undoGuard: false,        // throttles undo snapshots during typing
   _pendingCaret: null,      // absolute caret offset to restore after re-render
+
+  undoStack: [], redoStack: [],
+  // === add these two ===
+  composing: false,
+  retokenizeTimer: 0,
 };
 
 /* =========================
@@ -1047,19 +1052,20 @@ function getCurrentPlainText() {
   return wordsToText(state.currentTokens.filter(t => t.state !== 'del'));
 }
 
-function renderDiff() {
-  const base = state.hfBaselineText || '';
-  const cur = getCurrentPlainText();
-
+function renderDiff(curText /* optional */) {
   if (!els.diffBody) return;
 
+  const base = state.hfBaselineText || '';
+  // when editing modelessly, prefer the live DOM text
+  const cur = (typeof curText === 'string')
+    ? curText
+    : utils.plainText(els.transcript);
+
   if (!base) {
-    // No baseline → just mirror current text
     els.diffBody.textContent = cur;
     return;
   }
 
-  // tweak boundaries toward punctuation/whitespace
   DMP.Diff_Timeout = 2;
   DMP.Diff_EditCost = 8;
 
@@ -1073,6 +1079,7 @@ function renderDiff() {
     return `<span class="diff-equal">${utils.escapeHtml(data)}</span>`;
   }).join('');
 }
+
 
 /* =========================
    Probability highlighting
@@ -1443,27 +1450,33 @@ function setupPlayerAndControls() {
   // probability toggle
   const probBtn = els.probToggle;
   if (probBtn) {
-    probBtn.setAttribute('aria-pressed', String(state.probEnabled));
     function setProbUI() {
-
-      probBtn.textContent = state.probEnabled ? 'בטל הדגשת ודאות נמוכה' : 'הדגש ודאות נמוכה';
+      probBtn.setAttribute('aria-pressed', String(state.probEnabled));
+      probBtn.textContent = state.probEnabled ? 'בטל הדגשה' : 'הדגש ודאות נמוכה';
     }
+    // init from localStorage
+    state.probEnabled = (localStorage.getItem('probHL') ?? 'on') !== 'off';
     setProbUI();
 
     probBtn.addEventListener('click', () => {
       state.probEnabled = !state.probEnabled;
       localStorage.setItem('probHL', state.probEnabled ? 'on' : 'off');
       setProbUI();
-      applyProbHighlights();           // repaint with the unified painter
-      confirm?.applyHighlights?.();    // if your confirm layer repaints/imposes styles
+      // repaint existing nodes only
+      applyProbHighlights();
     });
   }
 
-  // ===== Modeless editing setup =====
+  // =========================
+  //   Modeless editing setup
+  // =========================
   if (els.transcript) {
     // prefer plaintext-only if supported; otherwise fallback to true
-    try { els.transcript.setAttribute('contenteditable', 'plaintext-only'); }
-    catch { els.transcript.setAttribute('contenteditable', 'true'); }
+    try {
+      els.transcript.setAttribute('contenteditable', 'plaintext-only');
+    } catch {
+      els.transcript.setAttribute('contenteditable', 'true');
+    }
 
     // keep default typing caret, avoid blue selection inversion from .word styles
     els.transcript.style.caretColor = 'var(--accent)';
@@ -1474,9 +1487,33 @@ function setupPlayerAndControls() {
       state._pendingCaret = sel ? sel[0] : null;
     });
 
-    // every change → rebuild tokens & refresh diff
+    // ===== IME guard =====
+    els.transcript.addEventListener('compositionstart', () => {
+      state.composing = true;
+    });
+    els.transcript.addEventListener('compositionend', () => {
+      state.composing = false;
+      // after IME finishes, sync immediately
+      renderDiff(utils.plainText(els.transcript));
+      scheduleModelSync(0);
+    });
+
+    // ===== Live typing =====
     els.transcript.addEventListener('input', () => {
-      handleLiveEdit();
+      if (state.composing) return; // let composition finish
+      const live = utils.plainText(els.transcript);
+
+      // keep the source-of-truth text in state (useful for exports)
+      state.data.text = live;
+
+      // update diff immediately
+      renderDiff(live);
+
+      // delay the heavy retokenize + spans rebuild
+      scheduleModelSync(180);
+
+      // optional: update confirm toolbar
+      confirm?.updateButtons?.();
     });
 
     // keep confirm toolbar state fresh as user changes selection
@@ -1485,7 +1522,14 @@ function setupPlayerAndControls() {
         confirm?.updateButtons?.();
       })
     );
+
+    // ===== On blur, make sure we are in sync =====
+    els.transcript.addEventListener('blur', () => {
+      if (state.composing) return;
+      scheduleModelSync(0);
+    });
   }
+
 
   // open -> focus the token input
   els.settingsBtn?.addEventListener('click', () => {
@@ -1539,7 +1583,7 @@ function setupPlayerAndControls() {
 }
 
 function tick() {
-  if (!state.wordEls.length || state.editingFull.active) return;
+  if (!state.wordEls.length) return;
   const t = els.player.currentTime;
 
   // cheap linear probe around lastIdx; fallback to full search if needed
