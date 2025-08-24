@@ -1084,10 +1084,43 @@ function renderDiff(curText /* optional */) {
 /* =========================
    Probability highlighting
    ========================= */
-function applyProbHighlights() {
-  if (!Array.isArray(state.wordEls)) return;
-  for (const el of state.wordEls) utils.paintWordProb(el);
+
+function getCssVar(name, fallback = '') {
+  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return v || fallback;
 }
+function applyProbHighlights() {
+  const color = utils.getCssVar ? utils.getCssVar('--prob-color', '255,235,59')
+    : getCssVar('--prob-color', '255,235,59');
+  const baseAlpha = parseFloat(
+    (utils.getCssVar ? utils.getCssVar('--prob-alpha', '0.6') : getCssVar('--prob-alpha', '0.6'))
+  ) || 0.6;
+
+  for (const el of state.wordEls) {
+    const p = parseFloat(el.dataset.prob);
+
+    // When highlighting is OFF, clear everyone (including active).
+    if (!state.probEnabled) {
+      el.style.backgroundColor = '';
+      continue;
+    }
+
+    // When ON, do not paint the active word inline — let CSS .word.active win.
+    if (el.classList.contains('active')) {
+      el.style.backgroundColor = '';
+      continue;
+    }
+
+    if (!Number.isFinite(p)) {
+      el.style.backgroundColor = '';
+      continue;
+    }
+
+    const alpha = utils.clamp01((1 - utils.clamp01(p)) * baseAlpha);
+    el.style.backgroundColor = `rgba(${color}, ${alpha})`;
+  }
+}
+
 
 // Legacy hook: if anything calls window.paintWordEl(el), route to the utils painter
 window.paintWordEl = utils.paintWordProb;
@@ -1454,18 +1487,26 @@ function setupPlayerAndControls() {
       probBtn.setAttribute('aria-pressed', String(state.probEnabled));
       probBtn.textContent = state.probEnabled ? 'בטל הדגשה' : 'הדגש ודאות נמוכה';
     }
-    // init from localStorage
-    state.probEnabled = (localStorage.getItem('probHL') ?? 'on') !== 'off';
+    // init from localStorage (default ON)
+    {
+      const saved = localStorage.getItem('probHL');
+      state.probEnabled = (saved == null) ? true : (saved !== 'off');
+    }
     setProbUI();
 
-    probBtn.addEventListener('click', () => {
+    // capture the click so no other handler can swallow it;
+    // also prevent default so it never submits a form, etc.
+    probBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+
       state.probEnabled = !state.probEnabled;
       localStorage.setItem('probHL', state.probEnabled ? 'on' : 'off');
       setProbUI();
-      // repaint existing nodes only
-      applyProbHighlights();
-    });
+      applyProbHighlights(); // repaint spans in-place
+    }, { capture: true });
   }
+
 
   // =========================
   //   Modeless editing setup
@@ -1601,27 +1642,44 @@ function tick() {
   } else {
     i = state.starts.findIndex((s, k) => t >= s && t <= state.ends[k]);
   }
+
   if (i === state.lastIdx) return;
 
-  // clear previous
+  // remove 'active' from previous and restore prob paint if needed
   if (state.lastIdx >= 0) {
     const prevEl = state.wordEls[state.lastIdx];
-    prevEl?.classList.remove('active', 'confirmed-active');   // <— also remove the new class
+    if (prevEl) {
+      prevEl.classList.remove('active');
+
+      if (state.probEnabled) {
+        const color = utils.getCssVar ? utils.getCssVar('--prob-color', '255,235,59')
+          : getCssVar('--prob-color', '255,235,59');
+        const baseAlpha = parseFloat(
+          (utils.getCssVar ? utils.getCssVar('--prob-alpha', '0.6') : getCssVar('--prob-alpha', '0.6'))
+        ) || 0.6;
+
+        const p = parseFloat(prevEl.dataset.prob);
+        if (Number.isFinite(p)) {
+          const alpha = utils.clamp01((1 - utils.clamp01(p)) * baseAlpha);
+          prevEl.style.backgroundColor = `rgba(${color}, ${alpha})`;
+        } else {
+          prevEl.style.backgroundColor = '';
+        }
+      } else {
+        prevEl.style.backgroundColor = '';
+      }
+    }
   }
 
-  // set new
   if (i >= 0) {
     const el = state.wordEls[i];
-    el?.classList.add('active');
-
-    // NEW: if this span intersects any confirmed range -> add 'confirmed-active'
-    const sAbs = state.absStarts[i] ?? -1;
-    const eAbs = state.absEnds[i] ?? -1;
-    const hit = Array.isArray(state.confirmedRanges) && state.confirmedRanges.some(({ range: [a, b] }) => !(eAbs <= a || sAbs >= b));
-    if (hit) el?.classList.add('confirmed-active');
-
-    // keep visible
-    el?.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+    if (el) {
+      // clear inline bg so CSS .word.active background is visible
+      el.style.backgroundColor = '';
+      el.classList.add('active');
+      // keep visible
+      el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+    }
   }
   state.lastIdx = i;
 }

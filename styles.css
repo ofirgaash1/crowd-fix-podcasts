@@ -46,19 +46,10 @@
   --active-bg: rgba(14, 165, 233, .18);
   /* sky-500 @ ~18% */
 
-  /* Active word that is also confirmed → add a subtle green ring */
-  #transcript .word.confirmed-active {
-    outline: 2px solid #22c55e;
-    /* Tailwind 'green-500' */
-    outline-offset: 2px;
-    border-radius: .2rem;
-  }
-
-
   /* Probability highlight (JS reads these) */
   --prob-color: 255,
-  235,
-  59;
+    235,
+    59;
   /* bright yellow */
   --prob-alpha: .6;
 
@@ -206,6 +197,13 @@ button:focus-visible {
   background: var(--pill-bg);
   color: var(--pill-fg);
   border: 1px solid var(--border);
+}
+
+#probToggle[aria-pressed="true"],
+#probToggle[aria-pressed="false"] {
+  pointer-events: auto !important;
+  opacity: 1 !important;
+  cursor: pointer !important;
 }
 
 .save {
@@ -416,8 +414,20 @@ header {
 }
 
 #transcript .word.active {
-  background: var(--active-bg);
+  background-color: var(--active-bg);
+  outline: 2px solid #22c55e;
+  outline-offset: 2px;
+  border-radius: .2rem;
 }
+
+/* Active word that is also confirmed → add a subtle green ring */
+#transcript .word.confirmed-active {
+  outline: 2px solid #22c55e;
+  /* Tailwind 'green-500' */
+  outline-offset: 2px;
+  border-radius: .2rem;
+}
+
 
 /* Confirmed ranges (JS wraps spans in edit preview) — green TEXT, no bg */
 #transcript .confirmed,
