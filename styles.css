@@ -414,10 +414,9 @@ header {
 }
 
 #transcript .word.active {
-  background-color: var(--active-bg);
-  outline: 2px solid #22c55e;
-  outline-offset: 2px;
-  border-radius: .2rem;
+  background: var(--active-bg);
+  transition:
+    background 0s ease-in-out
 }
 
 /* Active word that is also confirmed → add a subtle green ring */
@@ -428,6 +427,15 @@ header {
   border-radius: .2rem;
 }
 
+/* Probability highlight uses per-word CSS var --prob-a; color comes from --prob-color */
+#transcript.prob-on .word {
+  background-color: rgba(var(--prob-color), var(--prob-a, 0));
+}
+
+/* When a word is active, the active background wins */
+#transcript.prob-on .word.active {
+  background: var(--active-bg);
+}
 
 /* Confirmed ranges (JS wraps spans in edit preview) — green TEXT, no bg */
 #transcript .confirmed,

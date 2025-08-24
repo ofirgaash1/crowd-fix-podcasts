@@ -62,6 +62,7 @@ const LS_TEXTSZ = 'text-size-rem';
 
 const EPS = 1e-3;
 const MIN_WORD_DUR = 0.02;
+const PROB_THRESH = 0.95; // paint only when p < 95%
 
 const state = {
   data: { text: '', segments: [] },
@@ -1019,12 +1020,17 @@ function render() {
     sp.dataset.start = w.start;
     sp.dataset.end = w.end;
     sp.dataset.ti = ti;
-    if (Number.isFinite(w.probability)) sp.dataset.prob = String(w.probability);
+
+    // keep the DOM light: round to 2 decimals
+    if (Number.isFinite(w.probability)) {
+      sp.dataset.prob = (Math.round(w.probability * 100) / 100).toFixed(2);
+    }
 
     f.appendChild(sp);
     state.wordEls.push(sp);
     state.starts.push(w.start);
     state.ends.push(w.end);
+
 
     // NEW: absolute offsets for this rendered span
     const len = (w.word || '').length;
@@ -1085,41 +1091,31 @@ function renderDiff(curText /* optional */) {
    Probability highlighting
    ========================= */
 
-function getCssVar(name, fallback = '') {
-  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-  return v || fallback;
-}
 function applyProbHighlights() {
-  const color = utils.getCssVar ? utils.getCssVar('--prob-color', '255,235,59')
-    : getCssVar('--prob-color', '255,235,59');
-  const baseAlpha = parseFloat(
-    (utils.getCssVar ? utils.getCssVar('--prob-alpha', '0.6') : getCssVar('--prob-alpha', '0.6'))
-  ) || 0.6;
+  const root = els.transcript;
+  if (!root) return;
+
+  // one class on the container controls whether CSS paints anything
+  root.classList.toggle('prob-on', !!state.probEnabled);
+
+  const baseAlpha = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--prob-alpha')) || 0.6;
 
   for (const el of state.wordEls) {
     const p = parseFloat(el.dataset.prob);
-
-    // When highlighting is OFF, clear everyone (including active).
-    if (!state.probEnabled) {
-      el.style.backgroundColor = '';
-      continue;
+    let a = 0;
+    if (state.probEnabled && Number.isFinite(p) && p < PROB_THRESH) {
+      a = utils.clamp01((1 - p) * baseAlpha);
     }
+    // if active, suppress so active bg is visible
+    if (el.classList.contains('active')) a = 0;
 
-    // When ON, do not paint the active word inline — let CSS .word.active win.
-    if (el.classList.contains('active')) {
-      el.style.backgroundColor = '';
-      continue;
-    }
-
-    if (!Number.isFinite(p)) {
-      el.style.backgroundColor = '';
-      continue;
-    }
-
-    const alpha = utils.clamp01((1 - utils.clamp01(p)) * baseAlpha);
-    el.style.backgroundColor = `rgba(${color}, ${alpha})`;
+    // set just the alpha var; no inline rgba string
+    el.style.setProperty('--prob-a', String(a));
+    // nuke any legacy inline background from older code
+    el.style.backgroundColor = '';
   }
 }
+
 
 
 // Legacy hook: if anything calls window.paintWordEl(el), route to the utils painter
@@ -1196,7 +1192,7 @@ function markFile(filePath, hasCorrection) {
   const fileName = filePath.split('/').pop();
   const el = els.files.querySelector(`[data-file="${fileName}"]`);
   if (!el) return;
-  el.style.background = hasCorrection ? 'rgba(0,255,0,.08)' : 'rgba(255,0,0,.08)';
+  //el.style.background = hasCorrection ? 'rgba(0,255,0,.08)' : 'rgba(255,0,0,.08)';
 }
 
 async function fetchCorrections(filePaths) {
@@ -1467,7 +1463,6 @@ function setupPlayerAndControls() {
   // rate label init
   els.rateVal.textContent = '×' + (parseFloat(els.rate.value) || 1).toFixed(2);
 
-  els.player.addEventListener('timeupdate', tick);
   els.player.addEventListener('ratechange', () => {
     els.rate.value = String(els.player.playbackRate);
     els.rateVal.textContent = '×' + els.player.playbackRate.toFixed(2);
@@ -1505,6 +1500,26 @@ function setupPlayerAndControls() {
       setProbUI();
       applyProbHighlights(); // repaint spans in-place
     }, { capture: true });
+
+
+    let _rafId = null;
+    function _loop() {
+      _rafId = null;
+      tick();
+      if (!els.player.paused && !els.player.ended) {
+        _rafId = requestAnimationFrame(_loop);
+      }
+    }
+    els.player.addEventListener('play', () => {
+      if (!_rafId) _rafId = requestAnimationFrame(_loop);
+    });
+    els.player.addEventListener('pause', () => {
+      if (_rafId) { cancelAnimationFrame(_rafId); _rafId = null; }
+    });
+    els.player.addEventListener('ended', () => {
+      if (_rafId) { cancelAnimationFrame(_rafId); _rafId = null; }
+    });
+
   }
 
 
@@ -1623,66 +1638,70 @@ function setupPlayerAndControls() {
   }
 }
 
+// Upper-bound by start times: returns index of the last word with start <= t
+function indexByStart(t) {
+  let lo = 0, hi = state.starts.length - 1, ans = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (state.starts[mid] <= t) { ans = mid; lo = mid + 1; }
+    else hi = mid - 1;
+  }
+  return ans;
+}
+
 function tick() {
-  if (!state.wordEls.length) return;
+  if (!state.wordEls.length || state.editingFull?.active) return;
+
   const t = els.player.currentTime;
 
-  // cheap linear probe around lastIdx; fallback to full search if needed
-  let i = state.lastIdx;
-  if (i >= 0 && i < state.starts.length) {
-    const inRange = (t >= state.starts[i] && t <= state.ends[i]);
-    if (!inRange) {
-      const next = i + (t > state.ends[i] ? 1 : -1);
-      if (next >= 0 && next < state.starts.length && t >= state.starts[next] && t <= state.ends[next]) {
-        i = next;
-      } else {
-        i = state.starts.findIndex((s, k) => t >= s && t <= state.ends[k]);
-      }
+  // --- find candidate index ---
+  let i = indexByStart(t);
+  if (i < 0) i = 0;
+
+  // if we're not actually in range, fallback to old-style search
+  if (!(t >= state.starts[i] && t <= state.ends[i])) {
+    const next = i + (t > state.ends[i] ? 1 : -1);
+    if (next >= 0 && next < state.starts.length && t >= state.starts[next] && t <= state.ends[next]) {
+      i = next;
+    } else {
+      i = state.starts.findIndex((s, k) => t >= s && t <= state.ends[k]);
     }
-  } else {
-    i = state.starts.findIndex((s, k) => t >= s && t <= state.ends[k]);
   }
 
   if (i === state.lastIdx) return;
 
-  // remove 'active' from previous and restore prob paint if needed
+  // clear previous
   if (state.lastIdx >= 0) {
     const prevEl = state.wordEls[state.lastIdx];
     if (prevEl) {
-      prevEl.classList.remove('active');
+      prevEl.classList.remove('active', 'confirmed-active');
 
-      if (state.probEnabled) {
-        const color = utils.getCssVar ? utils.getCssVar('--prob-color', '255,235,59')
-          : getCssVar('--prob-color', '255,235,59');
-        const baseAlpha = parseFloat(
-          (utils.getCssVar ? utils.getCssVar('--prob-alpha', '0.6') : getCssVar('--prob-alpha', '0.6'))
-        ) || 0.6;
-
-        const p = parseFloat(prevEl.dataset.prob);
-        if (Number.isFinite(p)) {
-          const alpha = utils.clamp01((1 - utils.clamp01(p)) * baseAlpha);
-          prevEl.style.backgroundColor = `rgba(${color}, ${alpha})`;
-        } else {
-          prevEl.style.backgroundColor = '';
-        }
-      } else {
-        prevEl.style.backgroundColor = '';
+      // restore its probability alpha (since it's no longer active)
+      const pPrev = parseFloat(prevEl.dataset.prob);
+      const baseAlpha = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--prob-alpha')) || 0.6;
+      let aPrev = 0;
+      if (state.probEnabled && Number.isFinite(pPrev) && pPrev < PROB_THRESH) {
+        aPrev = utils.clamp01((1 - pPrev) * baseAlpha);
       }
+      prevEl.style.setProperty('--prob-a', String(aPrev));
     }
   }
 
-  if (i >= 0) {
-    const el = state.wordEls[i];
-    if (el) {
-      // clear inline bg so CSS .word.active background is visible
-      el.style.backgroundColor = '';
-      el.classList.add('active');
-      // keep visible
-      el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
-    }
+  // set current
+  const el = state.wordEls[i];
+  if (el) {
+    el.classList.add('active');
+    if (el.classList.contains('confirmed')) el.classList.add('confirmed-active');
+
+    // suppress prob alpha so active bg is visible
+    el.style.setProperty('--prob-a', '0');
+
+    el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
   }
+
   state.lastIdx = i;
 }
+
 
 
 /* transcript interactions */
