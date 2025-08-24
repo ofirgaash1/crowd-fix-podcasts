@@ -30,6 +30,8 @@
           </details>
 
           <button class="pill" id="dlVtt" type="button" title="הורד VTT" aria-label="הורד VTT">⬇️ VTT</button>
+          <button id="themeToggle" class="theme-toggle" aria-label="Toggle dark mode"> <span id="themeIcon"
+              aria-hidden="true">🌙</span> </button>
         </div>
 
         <!-- Center: audio element (should flex / grow with CSS) -->
@@ -108,7 +110,7 @@
   <button id="scrollTopBtn" class="fab" type="button" aria-label="חזור למעלה" title="למעלה">⬆️</button>
 
   <!-- Settings modal -->
-  <div id="modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle" hidden>
+  <div id="modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
     <div class="modal-content" role="document">
       <header class="modal-head">
         <h3 id="settingsTitle">הגדרות</h3>

@@ -1321,31 +1321,35 @@ function setupPlayerAndControls() {
   els.fontPlus.onclick = () => { state.fontSizeRem = Math.min(state.fontSizeRem + 0.10, 2.00); applyFontSize(); };
   els.fontMinus.onclick = () => { state.fontSizeRem = Math.max(state.fontSizeRem - 0.10, 0.60); applyFontSize(); };
 
-  els.settingsBtn.onclick = () => {
+  // open -> focus the token input
+  els.settingsBtn?.addEventListener('click', () => {
     els.modal.classList.add('open');
     els.hfToken.value = utils.getTok();
-    // focus the token input on open
     requestAnimationFrame(() => els.hfToken?.focus());
-  };
-  els.mClose.onclick = () => els.modal.classList.remove('open');
-  els.mSave.onclick = () => {
-    utils.setTok(els.hfToken.value.trim());
-    els.modal.classList.remove('open');
-  };
-  els.mClear.onclick = () => {
-    utils.setTok('');
-    els.hfToken.value = '';
-  };
-  els.modal.addEventListener('click', (e) => {
+  });
+
+  // click outside to close (you already have this; keep it)
+  els.modal?.addEventListener('click', (e) => {
     if (e.target === els.modal) els.modal.classList.remove('open');
   });
 
-  // ESC to close the modal (added)
+  // ESC to close
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && els.modal.classList.contains('open')) {
       els.modal.classList.remove('open');
     }
   });
+
+  // save/clear remain the same; make sure null checks exist
+  els.mSave?.addEventListener('click', () => {
+    utils.setTok(els.hfToken.value.trim());
+    els.modal.classList.remove('open');
+  });
+  els.mClear?.addEventListener('click', () => {
+    utils.setTok('');
+    els.hfToken.value = '';
+  });
+  els.mClose?.addEventListener('click', () => els.modal.classList.remove('open'));
 
 
   els.dlVtt.onclick = () => {
@@ -1698,30 +1702,33 @@ function init() {
 
 
 (function setupThemeToggle() {
-  const body = document.body;
-  const toggleBtn = document.getElementById('themeToggle');
-  const themeIcon = document.getElementById('themeIcon');
+  const root = document.documentElement; // <html>
+  const toggleBtn = document.getElementById("themeToggle");
+  const themeIcon = document.getElementById("themeIcon");
+
+
   if (!toggleBtn || !themeIcon) return;
 
   function applyTheme(mode) {
-    if (mode === 'dark') {
-      body.classList.add('dark-mode');
-      themeIcon.textContent = '☀️';
+    if (mode === "dark") {
+      root.classList.add("theme-dark");   // <html class="theme-dark">
+      themeIcon.textContent = "☀️";
     } else {
-      body.classList.remove('dark-mode');
-      themeIcon.textContent = '🌙';
+      root.classList.remove("theme-dark");
+      themeIcon.textContent = "🌙";
     }
-    localStorage.setItem('theme', mode);
+    localStorage.setItem("theme", mode);
   }
 
   const saved = localStorage.getItem('theme');
   const prefersDark = matchMedia('(prefers-color-scheme: dark)').matches;
   applyTheme(saved ? saved : (prefersDark ? 'dark' : 'light'));
 
-  toggleBtn.addEventListener('click', () => {
-    const isDark = body.classList.contains('dark-mode');
-    applyTheme(isDark ? 'light' : 'dark');
+  toggleBtn.addEventListener("click", () => {
+    const isDark = root.classList.contains("theme-dark");
+    applyTheme(isDark ? "light" : "dark");
   });
+
 })();
 
 

@@ -1,51 +1,60 @@
 /* ===========================
    Root variables & base setup
    =========================== */
-:root {
+:root{
+  /* Let form controls, scrollbars etc. use light styling */
+  color-scheme: light;
+
   /* Layout */
-  --w-nav: 320px;
-  /* browser (folders/files) column width */
-  --w-diff: 360px;
-  /* diff column width */
+  --w-nav: 320px;  /* browser (folders/files) column width */
+  --w-diff: 360px; /* diff column width */
 
   /* Typography */
   --font-body: system-ui, "Segoe UI", "Noto Sans Hebrew", "Rubik", Arial, sans-serif;
   --text-size: 1.10rem;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
-  /* Colors (light theme) */
-  --bg: #0a0a0a;
-  /* page background */
-  --panel: #121212;
-  /* card background */
-  --muted: #878787;
-  /* secondary text */
-  --fg: #efefef;
-  /* primary text */
-  --accent: #3ea6ff;
-  /* focus/links */
-  --border: #242424;
-  /* dividers */
-  --pill-bg: #1c1c1c;
-  --pill-fg: #efefef;
-  --pill-bg-hover: #232323;
+  /* Colors (true light theme) */
+  --bg: #f7f9fc;          /* page background */
+  --panel: #ffffff;       /* card background */
+  --fg: #0f172a;          /* primary text */
+  --muted: #64748b;       /* secondary text */
+  --accent: #0ea5e9;      /* focus/links */
+  --border: #e5e7eb;      /* dividers */
 
-  /* Diff colors */
-  --ins-bg: rgba(0, 180, 0, .14);
-  --del-bg: rgba(255, 60, 60, .16);
+  --pill-bg: #f1f5f9;
+  --pill-fg: #0f172a;
+  --pill-bg-hover: #e2e8f0;
+
+  /* Diff colors (subtle for light) */
+  --ins-bg: rgba(16, 185, 129, .16);  /* green-500 @ ~16% */
+  --del-bg: rgba(239, 68, 68, .15);   /* red-500 @ ~15% */
   --eq-bg: transparent;
 
   /* Transcript word highlight */
-  --active-bg: rgba(62, 166, 255, .20);
+  --active-bg: rgba(14, 165, 233, .18); /* sky-500 @ ~18% */
 
   /* Probability highlight (JS reads these) */
-  --prob-color: 255, 235, 59;
-  /* bright yellow */
+  --prob-color: 255, 235, 59; /* bright yellow */
   --prob-alpha: .6;
 
-  /* Elevation */
-  --shadow-1: 0 2px 10px rgba(0, 0, 0, .28);
-  --shadow-2: 0 8px 24px rgba(0, 0, 0, .35);
+  /* Elevation (lighter shadows in light mode) */
+  --shadow-1: 0 2px 6px rgba(0, 0, 0, .08);
+  --shadow-2: 0 12px 28px rgba(0, 0, 0, .12);
+}
+
+
+html.theme-dark{
+  color-scheme: dark;
+  --bg: #0b0f14;
+  --fg: #f2f3f5;
+  --panel: #0f141a;
+  --border: #1f2733;
+  --pill-bg: #111821;
+  --pill-fg: #ffffff;
+  --pill-bg-hover: #333333;
+  --hint: #9aa3af;
+  --accent: #38bdf8;
 }
 
 /* Respect system dark/light – easy to retheme later */
@@ -77,6 +86,9 @@
 html,
 body {
   height: 100%;
+  margin: 0;
+  color: var(--fg);
+  background: var(--bg);
 }
 
 html {
@@ -84,14 +96,25 @@ html {
 }
 
 body {
-  margin: 0;
   font: 400 15px/1.5 var(--font-body);
-  color: var(--fg);
-  background: var(--bg);
   direction: rtl;
   display: flex;
   flex-direction: column;
   /* header on top, main grows */
+}
+
+/* Dark mode overrides */
+body.dark-mode {
+  --bg: #0b0f14;
+  --fg: #e8eaef;
+  --muted: #a6adbb;
+  --border: #2a313a;
+  --card-bg: #0f141b;
+  --accent: #4db6ff;
+  --diff-ins: rgba(46, 204, 113, .18);
+  --diff-del: rgba(231, 76, 60, .20);
+  --prob-color: 255, 235, 59;
+  /* keep same "highlight yellow" */
 }
 
 /* Utilities */
@@ -146,7 +169,8 @@ button:focus-visible {
    Header / player cluster
    =========================== */
 header {
-  padding-inline: .75rem;
+  padding-inline: .2rem;
+  margin-top: 0.2rem;
 }
 
 #playerCard {
@@ -375,17 +399,21 @@ header {
 /* ===========================
    Modal
    =========================== */
-#modal[hidden] {
-  display: none;
-}
+
 
 #modal {
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, .45);
-  display: grid;
+  display: none;
+  /* default CLOSED */
   place-items: center;
   z-index: 50;
+}
+
+#modal.open {
+  /* only show when .open is present */
+  display: grid;
 }
 
 #modal .modal-content {
