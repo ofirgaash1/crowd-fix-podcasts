@@ -668,8 +668,6 @@ function normalizeBaselineForDiff(baselineTokens) {
 
 function assignTimesFromAnchors(arr) {
   const isWS = s => /^\s$/u.test(s);
-  const isWordKeep = w => w.state === 'keep' && !isWS(w.word) && Number.isFinite(w.start) && Number.isFinite(w.end) && w.end > w.start;
-  const isAnyKeep = w => w.state === 'keep' && Number.isFinite(w.start) && Number.isFinite(w.end);
 
   const leftAnchor = (i) => {
     for (let k = i - 1; k >= 0; k--) {
