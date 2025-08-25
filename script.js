@@ -60,8 +60,8 @@ const LS_W_NAV = 'w-nav';
 const LS_W_DIFF = 'w-diff';
 const LS_TEXTSZ = 'text-size-rem';
 
-const EPS = 1e-3;
-const MIN_WORD_DUR = 0.02;
+const EPS = 1e-2;
+const MIN_WORD_DUR = 0;
 const PROB_THRESH = 0.95; // paint only when p < 95%
 
 const state = {
@@ -79,6 +79,8 @@ const state = {
   absEnds: [],     // NEW: absolute char end per rendered span
   lastIdx: -1,
 
+  lastSavedSha: null,
+  probThreshold: 0.95,
 
   // playback / edit
   editingFull: { active: false, resume: false, original: '', caret: 0 },
@@ -167,7 +169,7 @@ const utils = {
     const rng = document.createRange();
     try { rng.setStart(sNode, sOff); rng.setEnd(eNode, eOff); } catch { return; }
     sel.removeAllRanges(); sel.addRange(rng);
-    container.focus();
+    // container.focus();
   },
 
   getTok: () => localStorage.getItem(TOKEN_KEY) || '',
@@ -294,11 +296,35 @@ const utils = {
    Confirmations (green text)
    ========================= */
 const confirm = {
-  /* ---- DB helpers ---- */
-  async ensureTranscriptRow(filePath) {
-    const { error } = await supa.from('transcripts').upsert({ file_path: filePath }, { onConflict: 'file_path' });
-    if (error) throw error;
+  // Ensure a parent transcripts row exists for the current file & hash.
+  // Works with both schemas:
+  //  - new:   UNIQUE(file_path, base_sha256)
+  //  - legacy:UNIQUE(file_path)
+  async ensureTranscriptRow(filePath, base_sha256, text) {
+    // 1) Try legacy: upsert by file_path only (most schemas)
+    let { error } = await supa
+      .from('transcripts')
+      .upsert(
+        { file_path: filePath, ...(typeof text === 'string' ? { text } : {}) },
+        { onConflict: 'file_path' }
+      );
+
+    if (!error) return;
+
+    // 2) If that fails (or schema expects composite), try composite
+    const row = {
+      file_path: filePath,
+      ...(base_sha256 ? { base_sha256 } : {}),
+      ...(typeof text === 'string' ? { text } : {})
+    };
+
+    let r2 = await supa
+      .from('transcripts')
+      .upsert(row, { onConflict: 'file_path,base_sha256' });
+
+    if (r2.error) throw r2.error;
   },
+
   async fetch(filePath) {
     const { data, error } = await supa
       .from('transcript_confirmations')
@@ -309,12 +335,25 @@ const confirm = {
     return data || [];
   },
   async save(filePath, mark) {
-    await confirm.ensureTranscriptRow(filePath);
-    const base_sha256 = await utils.sha256(utils.getCurrentPlainText());
-    const row = { file_path: filePath, base_sha256, ...mark };
-    const { error } = await supa.from('transcript_confirmations').insert(row);
+    const text = utils.getCurrentPlainText();
+    const base_sha256 = await utils.sha256(text);
+
+    await confirm.ensureTranscriptRow(filePath, base_sha256, text);
+
+    let { error } = await supa
+      .from('transcript_confirmations')
+      .insert({ file_path: filePath, base_sha256, ...mark });
+
+    // If we still got an FK error (e.g., race), ensure again and retry once
+    if (error && error.code === '23503') {
+      await confirm.ensureTranscriptRow(filePath, base_sha256, text);
+      ({ error } = await supa
+        .from('transcript_confirmations')
+        .insert({ file_path: filePath, base_sha256, ...mark }));
+    }
     if (error) throw error;
   },
+
   async del(ids) {
     if (!ids?.length) return;
     const { error } = await supa.from('transcript_confirmations').delete().in('id', ids);
@@ -483,6 +522,13 @@ const confirm = {
         : null;
       if (!filePath) { alert('אין קובץ נבחר'); return; }
 
+      // Prevent confirming against unsaved text
+      const curSha = await utils.sha256(text);
+      if (!state.lastSavedSha || state.lastSavedSha !== curSha) {
+        alert('יש שינויים שלא נשמרו. שמור את התיקון לפני סימון "אמין".');
+        return;
+      }
+
       try {
         await confirm.save(filePath, mark);
         await confirm.refreshForCurrentFile();
@@ -499,6 +545,13 @@ const confirm = {
         : null;
       if (!filePath) { alert('אין קובץ נבחר'); return; }
 
+      const text = utils.getCurrentPlainText();
+      const curSha = await utils.sha256(text);
+      if (!state.lastSavedSha || state.lastSavedSha !== curSha) {
+        alert('יש שינויים שלא נשמרו. שמור את התיקון לפני "סמן כלא אמין".');
+        return;
+      }
+
       try {
         const text = utils.getCurrentPlainText();
         const live = confirm.reattachAll(state.confirmedMarksRaw, text);
@@ -507,6 +560,10 @@ const confirm = {
 
         const leftovers = [];
         const base_sha256 = await utils.sha256(text);
+
+        // ensure parent row for (file_path, base_sha256) exists
+        await confirm.ensureTranscriptRow(filePath, base_sha256, text);
+
         for (const m of overlapping) {
           for (const [x, y] of confirm.subtractSpan(m.range, [s, e])) {
             if (y > x) leftovers.push({
@@ -517,10 +574,16 @@ const confirm = {
           }
         }
         if (leftovers.length) {
-          await confirm.ensureTranscriptRow(filePath);
-          const { error } = await supa.from('transcript_confirmations').insert(leftovers);
+          let { error } = await supa.from('transcript_confirmations').insert(leftovers);
+
+          if (error && error.code === '23503') {
+            // race: ensure again, retry once
+            await confirm.ensureTranscriptRow(filePath, base_sha256, text);
+            ({ error } = await supa.from('transcript_confirmations').insert(leftovers));
+          }
           if (error) throw error;
         }
+
         await confirm.del(overlapping.map(m => m.id));
         await confirm.refreshForCurrentFile();
       } catch (err) {
@@ -580,7 +643,7 @@ function flattenToTokens(d) {
         start: +w.start || 0,
         end: +w.end || ((+w.start || 0) + 0.25),
         state: 'keep',
-        probability: Number.isFinite(+w.probability) ? +w.probability : NaN
+        probability: (w.probability == null || !Number.isFinite(+w.probability)) ? NaN : +w.probability
       });
       lastEnd = toks[toks.length - 1].end;
     });
@@ -669,25 +732,28 @@ function normalizeBaselineForDiff(baselineTokens) {
 function assignTimesFromAnchors(arr) {
   const isWS = s => /^\s$/u.test(s);
 
-  const leftAnchor = (i) => {
-    for (let k = i - 1; k >= 0; k--) {
-      if (arr[k].state === 'keep' && arr[k].word === '\n') return null;
-      if (isWordKeep(arr[k])) return arr[k];
-    }
-    for (let k = i - 1; k >= 0; k--) {
-      if (arr[k].state === 'keep' && arr[k].word === '\n') return null;
-      if (isAnyKeep(arr[k])) return arr[k];
+  const leftNeighbor = (idx) => {
+    for (let k = idx - 1; k >= 0; k--) if (isPlaceable(arr[k]) && Number.isFinite(arr[k].end)) return arr[k];
+    return null;
+  };
+  const rightNeighbor = (idx) => {
+    for (let k = idx; k < arr.length; k++) if (isPlaceable(arr[k]) && Number.isFinite(arr[k].start)) return arr[k];
+    return null;
+  };
+
+  const nearestEarlierStartLT = (time, fromIdx) => {
+    for (let k = fromIdx - 1; k >= 0; k--) {
+      const t = arr[k];
+      if (!isPlaceable(t)) continue;
+      if (Number.isFinite(t.start) && t.start < time - EPS) return t;
     }
     return null;
   };
-  const rightAnchor = (i) => {
-    for (let k = i + 1; k < arr.length; k++) {
-      if (arr[k].state === 'keep' && arr[k].word === '\n') return null;
-      if (isWordKeep(arr[k])) return arr[k];
-    }
-    for (let k = i + 1; k < arr.length; k++) {
-      if (arr[k].state === 'keep' && arr[k].word === '\n') return null;
-      if (isAnyKeep(arr[k])) return arr[k];
+  const nearestLaterStartGT = (time, fromIdx) => {
+    for (let k = fromIdx; k < arr.length; k++) {
+      const t = arr[k];
+      if (!isPlaceable(t)) continue;
+      if (Number.isFinite(t.start) && t.start > time + EPS) return t;
     }
     return null;
   };
@@ -697,94 +763,146 @@ function assignTimesFromAnchors(arr) {
     if (arr[i].state !== 'ins') { i++; continue; }
     let j = i; while (j < arr.length && arr[j].state === 'ins') j++;
 
-    const L = leftAnchor(i), R = rightAnchor(j - 1);
+    // Gather slice info
     const slice = arr.slice(i, j);
-    const wordIdxs = slice.map((t, ix) => (/^\s$/u.test(t.word) ? -1 : ix)).filter(ix => ix >= 0);
+    const wordIdxs = slice.map((t, ix) => (isWS(t.word) ? -1 : ix)).filter(ix => ix >= 0);
     const wordCount = wordIdxs.length;
 
-    let winStart, winEnd;
-    const winLenFor = n => Math.max(0.12 * Math.max(1, n), 0.12);
+    if (wordCount === 0) {
+      // only whitespace anchors at the midpoint of the final window later
+      // but we still need a window; fall through to window selection
+    }
 
-    if (L && R && R.start > L.end) { winStart = L.end; winEnd = R.start; }
-    else if (L) { winStart = L.end; winEnd = L.end + winLenFor(wordCount); }
-    else if (R) { winEnd = R.start; winStart = R.start - winLenFor(wordCount); }
-    else { winStart = 0; winEnd = winLenFor(wordCount); }
+    const L = leftNeighbor(i);
+    const R = rightNeighbor(j);
 
-    if (winEnd <= winStart) winEnd = winStart + winLenFor(wordCount);
+    // Baseline window using immediate neighbors
+    let lo = Number.isFinite(L?.end) ? L.end : 0;
+    let hi = Number.isFinite(R?.start) ? R.start : (Number.isFinite(L?.end) ? L.end + 0.5 : 0.5);
 
-    if (wordCount > 0) {
-      const step = (winEnd - winStart) / (wordCount + 1);
-      let nthWord = 0;
-      let prevAssigned = Number.isFinite(L?.end) ? L.end : -Infinity;
+    // If immediate gap is not usable (<= EPS), expand outward as you suggested:
+    // find first start < pivot (R.start) and first start > pivot (L.end), and split between them.
+    const pivot = Number.isFinite(R?.start) ? R.start
+      : Number.isFinite(L?.end) ? L.end
+        : 0;
 
-      for (let k = 0; k < slice.length; k++) {
-        const g = arr[i + k];
+    if (!(hi - lo > EPS)) {
+      const earlier = nearestEarlierStartLT(pivot, i);
+      const later = nearestLaterStartGT(pivot, j);
 
-        if (isWS(g.word)) {
-          let anchor = winStart + (winEnd - winStart) * ((k + 1) / (slice.length + 1));
-          anchor = Math.max(anchor, prevAssigned + EPS, winStart + EPS);
-          if (R) anchor = Math.min(anchor, R.start - EPS);
-          g.start = g.end = anchor;
-          prevAssigned = g.start;
-          continue;
+      // If we found real bounds, use them; else fall back to sensible defaults
+      if (earlier) lo = Math.max(lo, Number.isFinite(earlier.end) ? earlier.end : earlier.start);
+      if (later) hi = Math.min(hi, later.start);
+
+      // If still no span, synthesize a small span around pivot
+      if (!(hi - lo > EPS)) {
+        const fallbackSpan = Math.max(MIN_WORD_DUR * Math.max(1, wordCount), 0.24); // ~240ms baseline
+        if (!Number.isFinite(R?.start) && Number.isFinite(L?.end)) {
+          lo = L.end + EPS; hi = lo + fallbackSpan;
+        } else if (Number.isFinite(R?.start) && !Number.isFinite(L?.end)) {
+          hi = R.start - EPS; lo = Math.max(0, hi - fallbackSpan);
+        } else if (Number.isFinite(R?.start) && Number.isFinite(L?.end)) {
+          // pack just before R, but do not cross the previous real end (if any)
+          hi = R.start - EPS;
+          lo = Math.max(0, hi - fallbackSpan, Number.isFinite(L?.end) ? L.end + EPS : -Infinity);
+          if (!(hi - lo > EPS)) {
+            // as a last resort, collapse to a point
+            lo = hi - MIN_WORD_DUR * Math.max(1, wordCount);
+          }
+        } else {
+          // no anchors at all
+          lo = 0; hi = fallbackSpan;
         }
-
-        nthWord++;
-        const center = winStart + step * nthWord;
-        let s = Math.max(center - step * 0.45, prevAssigned + EPS, winStart + EPS);
-        if (R) s = Math.min(s, R.start - EPS);
-        let e = s + Math.max(MIN_WORD_DUR, step * 0.9);
-        if (R && e > R.start - EPS) e = Math.max(s + MIN_WORD_DUR, R.start - EPS);
-
-        g.start = s; g.end = e;
-        prevAssigned = g.start;
-      }
-    } else {
-      // only whitespace
-      let a = winStart + (winEnd - winStart) / 2;
-      if (L) a = Math.max(a, L.end + EPS);
-      if (R) a = Math.min(a, R.start - EPS);
-      for (let k = 0; k < slice.length; k++) {
-        const g = arr[i + k];
-        g.start = g.end = a;
       }
     }
 
-    // local monotonicity
-    (function monotonicize(leftBound) {
-      let last = Number.isFinite(leftBound) ? leftBound : -Infinity;
-      for (let k = i; k < j; k++) {
-        const g = arr[k], ws = isWS(g.word);
-        if (!Number.isFinite(g.start)) g.start = last + EPS;
-        if (g.start < last - EPS) g.start = last + EPS;
-        if (!Number.isFinite(g.end)) g.end = g.start + (ws ? 0 : MIN_WORD_DUR);
-        if (g.end < g.start) g.end = g.start + (ws ? 0 : MIN_WORD_DUR);
-        last = g.start;
+    // Now we have [lo, hi] to place the inserted slice.
+    // Evenly space **words** between lo..hi; place **whitespace** at midpoints with zero duration.
+    const span = Math.max(hi - lo, MIN_WORD_DUR * Math.max(1, wordCount));
+    const step = wordCount > 0 ? (span / (wordCount + 1)) : span; // if no words, whitespace goes midpoint
+
+    // Assign times
+    let nthWord = 0;
+    let lastAssigned = lo - EPS;
+
+    for (let k2 = 0; k2 < slice.length; k2++) {
+      const g = arr[i + k2];
+      const ws = isWS(g.word);
+
+      if (ws) {
+        // Put whitespace at a proportion between neighbors; zero duration, monotone start
+        // Use a simple evenly spaced anchor across full slice length + 1
+        const anchor = Math.min(
+          hi - EPS,
+          Math.max(lo + EPS, lastAssigned + EPS)
+        );
+        g.start = g.end = anchor;
+        lastAssigned = g.start;
+        continue;
       }
-    })(L?.end);
+
+      // word
+      nthWord++;
+      let s = lo + step * nthWord;
+      // Ensure monotonicity and clamp to window
+      s = Math.max(s, lastAssigned + EPS, lo + EPS);
+      s = Math.min(s, hi - MIN_WORD_DUR);
+      let e = Math.min(s + Math.max(MIN_WORD_DUR, step * 0.9), hi - EPS);
+
+      if (e < s) e = s + MIN_WORD_DUR; // final guard
+
+      g.start = s;
+      g.end = e;
+      lastAssigned = g.start;
+    }
+
+    // Local monotonicity within the slice
+    (function monotonicize() {
+      let prev = lo - EPS;
+      for (let k3 = i; k3 < j; k3++) {
+        const t = arr[k3], ws = isWS(t.word);
+        if (!Number.isFinite(t.start)) t.start = prev + EPS;
+        if (t.start < prev - EPS) t.start = prev + EPS;
+        if (!Number.isFinite(t.end)) t.end = t.start + (ws ? 0 : MIN_WORD_DUR);
+        if (t.end < t.start) t.end = t.start + (ws ? 0 : MIN_WORD_DUR);
+        prev = t.start;
+      }
+    })();
 
     i = j;
   }
 
-  // global sweep
+  // Global pass: keep tokens are anchors; inserts/whitespace yield
   let prev = -Infinity;
   for (let k = 0; k < arr.length; k++) {
     const t = arr[k];
     if (t.state === 'del' || t.word === '\n') continue;
-    const ws = /^\s$/u.test(t.word);
+    const ws = isWS(t.word);
 
     if (!Number.isFinite(t.start)) t.start = prev + EPS;
     if (!Number.isFinite(t.end)) t.end = t.start + (ws ? 0 : MIN_WORD_DUR);
 
     if (t.start < prev - EPS) {
-      if (t.state === 'ins' || ws || t.end < prev) {
+      if (t.state === 'ins' || ws) {
         t.start = prev + EPS;
         if (t.end < t.start) t.end = t.start + (ws ? 0 : MIN_WORD_DUR);
+      } else {
+        // keep token wins: reset baseline
+        prev = t.start;
+        continue;
       }
     }
     prev = Math.max(prev, t.start);
   }
+
+  // Final rounding for readability/stability
+  for (const t of arr) {
+    if (Number.isFinite(t.start)) t.start = Number(t.start.toFixed(3));
+    if (Number.isFinite(t.end)) t.end = Number(t.end.toFixed(3));
+  }
 }
+
+
 
 function repairChronology(tokens) {
   let prev = -Infinity;
@@ -881,7 +999,6 @@ function rebuildFromTranscriptNow() {
   render();
   renderDiff?.();
   applyProbHighlights?.();
-  confirm.applyHighlights?.();
   confirm.updateButtons?.();
 
   // 4) restore selection
@@ -1011,7 +1128,6 @@ function render() {
       return;
     }
 
-
     const sp = document.createElement('span');
     sp.className = 'word';
     sp.textContent = w.word;
@@ -1019,15 +1135,18 @@ function render() {
     sp.dataset.end = w.end;
     sp.dataset.ti = ti;
 
-    // keep the DOM light: round to 2 decimals
-    if (Number.isFinite(w.probability)) {
-      sp.dataset.prob = (Math.round(w.probability * 100) / 100).toFixed(2);
+    // ✅ Only set data-prob if it's a valid 0..1 number; otherwise remove it
+    if (Number.isFinite(w.probability) && w.probability >= 0 && w.probability <= 0.95) {
+      sp.dataset.prob = (+w.probability).toFixed(3);
+    } else {
+      sp.removeAttribute('data-prob');
     }
 
     f.appendChild(sp);
     state.wordEls.push(sp);
     state.starts.push(w.start);
     state.ends.push(w.end);
+
 
 
     // NEW: absolute offsets for this rendered span
@@ -1070,8 +1189,8 @@ function renderDiff(curText /* optional */) {
     return;
   }
 
-  DMP.Diff_Timeout = 2;
-  DMP.Diff_EditCost = 8;
+  DMP.Diff_Timeout = 10;
+  DMP.Diff_EditCost = 30;
 
   const diffs = DMP.diff_main(base, cur);
   DMP.diff_cleanupSemantic(diffs);
@@ -1099,16 +1218,17 @@ function applyProbHighlights() {
   const baseAlpha = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--prob-alpha')) || 0.6;
 
   for (const el of state.wordEls) {
-    const p = parseFloat(el.dataset.prob);
     let a = 0;
-    if (state.probEnabled && Number.isFinite(p) && p < PROB_THRESH) {
+    const p = parseFloat(el.dataset.prob);
+    const threshold = state.probThreshold ?? 0.95;
+    if (state.probEnabled || !Number.isFinite(p) || !(p < threshold)) {
       a = utils.clamp01((1 - p) * baseAlpha);
     }
     // if active, suppress so active bg is visible
     if (el.classList.contains('active')) a = 0;
 
     // set just the alpha var; no inline rgba string
-    el.style.setProperty('--prob-a', String(a));
+    el.style.setProperty('--prob-a', String(parseFloat(a.toFixed(2)))); // fixed 2 decimals
     // nuke any legacy inline background from older code
     el.style.backgroundColor = '';
   }
@@ -1150,6 +1270,7 @@ function filterImmediate(items, base) {
     return d === depth + 1;
   });
 }
+
 async function listTree(path = '') {
   const base = 'https://huggingface.co/api/datasets/ivrit-ai/audio-v2-opus/tree/main';
   const urls = path ? [
@@ -1190,7 +1311,7 @@ function markFile(filePath, hasCorrection) {
   const fileName = filePath.split('/').pop();
   const el = els.files.querySelector(`[data-file="${fileName}"]`);
   if (!el) return;
-  //el.style.background = hasCorrection ? 'rgba(0,255,0,.08)' : 'rgba(255,0,0,.08)';
+  el.style.background = hasCorrection ? 'rgba(0,255,0,.08)' : 'rgba(255,0,0,.08)';
 }
 
 async function fetchCorrections(filePaths) {
@@ -1340,6 +1461,11 @@ async function load(audioPath, trPath) {
     render();
     renderDiff();
 
+    // record "last saved" = what’s currently shown
+    try {
+      state.lastSavedSha = await utils.sha256(state.data.text || '');
+    } catch { }
+
     // Paint confirmations and sync DB-based marks to current text
     if (token !== state.lastLoad.token) return;
     if (typeof confirm !== 'undefined' && confirm?.refreshForCurrentFile) {
@@ -1370,7 +1496,7 @@ async function load(audioPath, trPath) {
     els.player.playbackRate = parseFloat(els.rate.value) || 1;
     els.player.currentTime = 0.01;
   } catch (e) {
-    if (e.name !== 'AbortError') alert(e.message || e);
+    if (e.name !== 'AbortError') alert(e.message || e); console.error(e);
   } finally {
     if (state.currentFileNode) state.currentFileNode.classList.remove('loading');
   }
@@ -1421,10 +1547,10 @@ const ui = {
 
     // 2) rebuild tokens against baseline
     try {
-      state.undoStack.push(handlers.snapshot());
+      state.undoStack.push(snapshot());
       state.redoStack.length = 0;
-      state.currentTokens = dataProcessing.buildFromBaseline(state.baselineTokens, newText);
-      state.data = dataProcessing.tokensToData(state.currentTokens);
+      state.currentTokens = buildFromBaseline(state.baselineTokens, newText);
+      state.data = tokensToData(state.currentTokens);
     } catch (err) {
       console.error('rebuildFromTranscript failed:', err);
       return;
@@ -1433,8 +1559,8 @@ const ui = {
     // 3) re-render spans and highlights
     render();            // rebuild <span class="word">
     renderDiff?.();      // optional: keep diff live
-    probHighlight?.apply?.();
-    applyConfirmationHighlights?.();
+    applyProbHighlights?.();
+    confirm.applyHighlights?.()
 
     // 4) restore selection
     if (beforeSel) utils.setSelectionByOffsets(el, beforeSel[0], beforeSel[1]);
@@ -1524,6 +1650,34 @@ function setupPlayerAndControls() {
   // =========================
   //   Modeless editing setup
   // =========================
+
+  function scheduleModelSync(delay = 180) {
+    clearTimeout(state.retokenizeTimer);
+    state.retokenizeTimer = setTimeout(syncModelFromDOM, delay);
+  }
+
+  function syncModelFromDOM() {
+    // capture selection BEFORE rebuild
+    const sel = utils.getSelectionOffsets(els.transcript);
+    const txt = utils.plainText(els.transcript);
+
+    // update model from baseline + live text
+    state.currentTokens = buildFromBaseline(state.baselineTokens, txt);
+    state.data = tokensToData(state.currentTokens);
+
+    // full re-render of word spans
+    render();
+
+    // restore selection AFTER rebuild
+    if (sel) utils.setSelectionByOffsets(els.transcript, sel[0], sel[1]);
+
+    // styling overlays
+    applyProbHighlights();
+    if (confirm?.applyHighlights) confirm.applyHighlights();
+    if (confirm?.updateButtons) confirm.updateButtons();
+  }
+
+
   if (els.transcript) {
     // prefer plaintext-only if supported; otherwise fallback to true
     try {
@@ -1715,6 +1869,18 @@ els.transcript.addEventListener('click', (e) => {
     e.preventDefault();
   }
 });
+
+// Right-click (contextmenu) a word → seek/play
+els.transcript.addEventListener('contextmenu', (e) => {
+  const el = e.target.closest('.word');
+  if (!el) return;
+  const t = +el.dataset.start;
+  if (Number.isFinite(t)) {
+    els.player.currentTime = t + .01;
+    try { els.player.play(); } catch { }
+    e.preventDefault();   // stops default context menu
+  }
+});
 // IME-safe composition gating
 els.transcript.addEventListener('compositionstart', () => { ui._composing = true; });
 els.transcript.addEventListener('compositionend', () => { ui._composing = false; ui.requestRebuildFromTranscript(); });
@@ -1774,6 +1940,10 @@ els.submitBtn?.addEventListener('click', async () => {
     alert('✅ נשמר בהצלחה למסד הנתונים!');
     const el = els.files.querySelector(`[data-file="${state.currentFileNode.dataset.file}"]`);
     if (el) el.style.background = 'rgba(0,255,0,.08)';
+    // update lastSavedSha to the text we just persisted
+    try {
+      state.lastSavedSha = await utils.sha256((state.data?.text) || '');
+    } catch { console.error(e); }
   } catch (e) {
     console.error(e);
     alert('❌ שגיאה בשמירת תיקון: ' + (e.message || e));
@@ -1783,18 +1953,41 @@ els.submitBtn?.addEventListener('click', async () => {
 /* =========================
    Chronology check
    ========================= */
+/* =========================
+   Chronology validation (verbose)
+   ========================= */
+// ▼▼▼ REPLACE your old validateChronology with this whole function ▼▼▼
 function validateChronology(tokens) {
   let prevStart = -Infinity;
   const issues = [];
   tokens.forEach((t, i) => {
     if (t.state === 'del' || t.word === '\n') return;
+    const ws = /^\s$/u.test(t.word);
     const s = t.start, e = t.end;
-    const label = `${i}:${JSON.stringify(t.word)}`;
+    const label = `${i}:${JSON.stringify(t.word)} [${s}→${e}]`;
+
     if (!Number.isFinite(s) || !Number.isFinite(e)) { issues.push(`NaN time at ${label}`); return; }
-    if (e < s - EPS) issues.push(`end<start at ${label} (${s}→${e})`);
-    if (s < prevStart - EPS) issues.push(`non-monotonic start at ${label} (${s} < prev ${prevStart})`);
-    prevStart = Math.max(prevStart, s);
+    if (e < s - EPS) issues.push(`end<start at ${label}`);
+
+    // chronology check with anchor semantics
+    if (s + EPS < prevStart) {
+      if (t.state === 'keep') {
+        // anchor wins: reset baseline to the true time, do not flag
+        prevStart = s;
+        return;
+      }
+      // inserts/WS must yield; or if the token fully overlaps before baseline end, it’s a real error
+      if (ws || e < prevStart) {
+        issues.push(`non-monotonic start at ${label} (prev ${prevStart})`);
+      } else {
+        // optional softer classification; keep as error if you prefer
+        issues.push(`soft overlap at ${label} (prev ${prevStart})`);
+      }
+    } else {
+      prevStart = Math.max(prevStart, s);
+    }
   });
+
   if (issues.length) {
     console.error('⛔ Token chronology issues:\n' + issues.join('\n'));
     alert('בעיית כרונולוגיה בזמנים:\n' + issues.slice(0, 20).join('\n') + (issues.length > 20 ? `\n…ועוד ${issues.length - 20}` : ''));
@@ -1802,6 +1995,9 @@ function validateChronology(tokens) {
   }
   return true;
 }
+
+// ▲▲▲ END replacement ▲▲▲
+
 
 /* =========================
    Scroll sync (two-way)
