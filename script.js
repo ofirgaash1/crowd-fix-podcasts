@@ -61,7 +61,7 @@ const LS_W_DIFF = 'w-diff';
 const LS_TEXTSZ = 'text-size-rem';
 
 const EPS = 1e-2;
-const MIN_WORD_DUR = 0.02;
+const MIN_WORD_DUR = 0;
 const PROB_THRESH = 0.95; // paint only when p < 95%
 
 const state = {
