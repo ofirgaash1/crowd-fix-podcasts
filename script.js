@@ -169,7 +169,7 @@ const utils = {
     const rng = document.createRange();
     try { rng.setStart(sNode, sOff); rng.setEnd(eNode, eOff); } catch { return; }
     sel.removeAllRanges(); sel.addRange(rng);
-    container.focus();
+    // container.focus();
   },
 
   getTok: () => localStorage.getItem(TOKEN_KEY) || '',
@@ -1875,6 +1875,18 @@ els.transcript.addEventListener('click', (e) => {
     els.player.currentTime = t + .01;
     try { els.player.play(); } catch { }
     e.preventDefault();
+  }
+});
+
+// Right-click (contextmenu) a word → seek/play
+els.transcript.addEventListener('contextmenu', (e) => {
+  const el = e.target.closest('.word');
+  if (!el) return;
+  const t = +el.dataset.start;
+  if (Number.isFinite(t)) {
+    els.player.currentTime = t + .01;
+    try { els.player.play(); } catch { }
+    e.preventDefault();   // stops default context menu
   }
 });
 // IME-safe composition gating
