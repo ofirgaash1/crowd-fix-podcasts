@@ -643,7 +643,7 @@ function flattenToTokens(d) {
         start: +w.start || 0,
         end: +w.end || ((+w.start || 0) + 0.25),
         state: 'keep',
-        probability: Number.isFinite(+w.probability) ? +w.probability : NaN
+        probability: (w.probability == null || !Number.isFinite(+w.probability)) ? NaN : +w.probability
       });
       lastEnd = toks[toks.length - 1].end;
     });
@@ -1136,7 +1136,6 @@ function render() {
       return;
     }
 
-
     const sp = document.createElement('span');
     sp.className = 'word';
     sp.textContent = w.word;
@@ -1279,6 +1278,7 @@ function filterImmediate(items, base) {
     return d === depth + 1;
   });
 }
+
 async function listTree(path = '') {
   const base = 'https://huggingface.co/api/datasets/ivrit-ai/audio-v2-opus/tree/main';
   const urls = path ? [
