@@ -294,10 +294,30 @@ const utils = {
    Confirmations (green text)
    ========================= */
 const confirm = {
-  /* ---- DB helpers ---- */
-  async ensureTranscriptRow(filePath) {
-    const { error } = await supa.from('transcripts').upsert({ file_path: filePath }, { onConflict: 'file_path' });
-    if (error) throw error;
+  // Ensure a parent transcripts row exists for the current file & hash.
+  // Works with both schemas:
+  //  - new:   UNIQUE(file_path, base_sha256)
+  //  - legacy:UNIQUE(file_path)
+  async ensureTranscriptRow(filePath, base_sha256, text) {
+    // Prefer composite upsert if available
+    const row = { file_path: filePath };
+    if (base_sha256) row.base_sha256 = base_sha256;
+    if (typeof text === 'string') row.text = text;
+
+    // Try composite key first
+    let { error } = await supa
+      .from('transcripts')
+      .upsert(row, { onConflict: 'file_path,base_sha256' });
+
+    if (error) {
+      // If columns don't exist (legacy schema), fall back to file_path only
+      // Postgres undefined_column is 42703; with PostgREST you may just get a generic error.
+      const legacy = await supa
+        .from('transcripts')
+        .upsert({ file_path: filePath }, { onConflict: 'file_path' });
+
+      if (legacy.error) throw legacy.error;
+    }
   },
   async fetch(filePath) {
     const { data, error } = await supa
@@ -309,12 +329,25 @@ const confirm = {
     return data || [];
   },
   async save(filePath, mark) {
-    await confirm.ensureTranscriptRow(filePath);
-    const base_sha256 = await utils.sha256(utils.getCurrentPlainText());
-    const row = { file_path: filePath, base_sha256, ...mark };
-    const { error } = await supa.from('transcript_confirmations').insert(row);
+    const text = utils.getCurrentPlainText();
+    const base_sha256 = await utils.sha256(text);
+
+    await confirm.ensureTranscriptRow(filePath, base_sha256, text);
+
+    let { error } = await supa
+      .from('transcript_confirmations')
+      .insert({ file_path: filePath, base_sha256, ...mark });
+
+    // If we still got an FK error (e.g., race), ensure again and retry once
+    if (error && error.code === '23503') {
+      await confirm.ensureTranscriptRow(filePath, base_sha256, text);
+      ({ error } = await supa
+        .from('transcript_confirmations')
+        .insert({ file_path: filePath, base_sha256, ...mark }));
+    }
     if (error) throw error;
   },
+
   async del(ids) {
     if (!ids?.length) return;
     const { error } = await supa.from('transcript_confirmations').delete().in('id', ids);
@@ -507,6 +540,10 @@ const confirm = {
 
         const leftovers = [];
         const base_sha256 = await utils.sha256(text);
+
+        // ensure parent row for (file_path, base_sha256) exists
+        await confirm.ensureTranscriptRow(filePath, base_sha256, text);
+
         for (const m of overlapping) {
           for (const [x, y] of confirm.subtractSpan(m.range, [s, e])) {
             if (y > x) leftovers.push({
@@ -517,10 +554,16 @@ const confirm = {
           }
         }
         if (leftovers.length) {
-          await confirm.ensureTranscriptRow(filePath);
-          const { error } = await supa.from('transcript_confirmations').insert(leftovers);
+          let { error } = await supa.from('transcript_confirmations').insert(leftovers);
+
+          if (error && error.code === '23503') {
+            // race: ensure again, retry once
+            await confirm.ensureTranscriptRow(filePath, base_sha256, text);
+            ({ error } = await supa.from('transcript_confirmations').insert(leftovers));
+          }
           if (error) throw error;
         }
+
         await confirm.del(overlapping.map(m => m.id));
         await confirm.refreshForCurrentFile();
       } catch (err) {
@@ -883,7 +926,6 @@ function rebuildFromTranscriptNow() {
   render();
   renderDiff?.();
   applyProbHighlights?.();
-  confirm.applyHighlights?.();
   confirm.updateButtons?.();
 
   // 4) restore selection
@@ -1072,8 +1114,8 @@ function renderDiff(curText /* optional */) {
     return;
   }
 
-  DMP.Diff_Timeout = 2;
-  DMP.Diff_EditCost = 8;
+  DMP.Diff_Timeout = 10;
+  DMP.Diff_EditCost = 30;
 
   const diffs = DMP.diff_main(base, cur);
   DMP.diff_cleanupSemantic(diffs);
@@ -1192,7 +1234,7 @@ function markFile(filePath, hasCorrection) {
   const fileName = filePath.split('/').pop();
   const el = els.files.querySelector(`[data-file="${fileName}"]`);
   if (!el) return;
-  //el.style.background = hasCorrection ? 'rgba(0,255,0,.08)' : 'rgba(255,0,0,.08)';
+  el.style.background = hasCorrection ? 'rgba(0,255,0,.08)' : 'rgba(255,0,0,.08)';
 }
 
 async function fetchCorrections(filePaths) {
@@ -1423,10 +1465,10 @@ const ui = {
 
     // 2) rebuild tokens against baseline
     try {
-      state.undoStack.push(handlers.snapshot());
+      state.undoStack.push(snapshot());
       state.redoStack.length = 0;
-      state.currentTokens = dataProcessing.buildFromBaseline(state.baselineTokens, newText);
-      state.data = dataProcessing.tokensToData(state.currentTokens);
+      state.currentTokens = buildFromBaseline(state.baselineTokens, newText);
+      state.data = tokensToData(state.currentTokens);
     } catch (err) {
       console.error('rebuildFromTranscript failed:', err);
       return;
@@ -1435,8 +1477,8 @@ const ui = {
     // 3) re-render spans and highlights
     render();            // rebuild <span class="word">
     renderDiff?.();      // optional: keep diff live
-    probHighlight?.apply?.();
-    applyConfirmationHighlights?.();
+    applyProbHighlights?.();
+    confirm.applyHighlights?.()
 
     // 4) restore selection
     if (beforeSel) utils.setSelectionByOffsets(el, beforeSel[0], beforeSel[1]);
@@ -1526,6 +1568,34 @@ function setupPlayerAndControls() {
   // =========================
   //   Modeless editing setup
   // =========================
+
+  function scheduleModelSync(delay = 180) {
+    clearTimeout(state.retokenizeTimer);
+    state.retokenizeTimer = setTimeout(syncModelFromDOM, delay);
+  }
+
+  function syncModelFromDOM() {
+    // capture selection BEFORE rebuild
+    const sel = utils.getSelectionOffsets(els.transcript);
+    const txt = utils.plainText(els.transcript);
+
+    // update model from baseline + live text
+    state.currentTokens = buildFromBaseline(state.baselineTokens, txt);
+    state.data = tokensToData(state.currentTokens);
+
+    // full re-render of word spans
+    render();
+
+    // restore selection AFTER rebuild
+    if (sel) utils.setSelectionByOffsets(els.transcript, sel[0], sel[1]);
+
+    // styling overlays
+    applyProbHighlights();
+    if (confirm?.applyHighlights) confirm.applyHighlights();
+    if (confirm?.updateButtons) confirm.updateButtons();
+  }
+
+
   if (els.transcript) {
     // prefer plaintext-only if supported; otherwise fallback to true
     try {
