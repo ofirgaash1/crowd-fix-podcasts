@@ -1,12 +1,9 @@
 <!doctype html>
 <html lang="he" dir="rtl">
-
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>עורך תמלילים</title>
-
-  <!-- Link CSS later -->
   <link rel="stylesheet" href="styles.css">
 </head>
 
@@ -18,24 +15,29 @@
       <h2 id="playerCardTitle" class="visually-hidden">נגן אודיו</h2>
 
       <div class="head">
-        <!-- Right cluster: settings, keyboard help, VTT download -->
+        <!-- Right cluster: settings, keyboard help, VTT download, theme -->
         <div class="cluster right">
-
           <details class="hint" id="kbdHelp">
             <summary aria-label="קיצורי מקלדת">⌨️ קיצורים</summary>
             <div>
-              קליק ימני לעריכת הטקסט · Enter לשמירה · Esc לביטול · Ctrl+Z לביטול · Ctrl+Shift+Z לשחזור
+              Alt+קליק לנגינה מנקודת המילה ·
+              קליק ימני גם מקפיץ לנקודה ·
+              Ctrl+Z לביטול · Ctrl+Shift+Z לשחזור
             </div>
           </details>
-          <button id="settingsBtn" type="button" aria-haspopup="dialog" aria-controls="modal" title="הגדרות">⚙️ צדיק,
-            הזנת טוקן?</button>
+
+          <button id="settingsBtn" type="button" aria-haspopup="dialog" aria-controls="modal" title="הגדרות">
+            ⚙️ הזנת טוקן?
+          </button>
 
           <button class="pill" id="dlVtt" type="button" title="הורד VTT" aria-label="הורד VTT">⬇️ VTT</button>
-          <button id="themeToggle" class="theme-toggle" aria-label="Toggle dark mode"> <span id="themeIcon"
-              aria-hidden="true">🌙</span> </button>
+
+          <button id="themeToggle" class="theme-toggle" aria-label="החלף מצב תצוגה">
+            <span id="themeIcon" aria-hidden="true">🌙</span>
+          </button>
         </div>
 
-        <!-- Center: audio element (should flex / grow with CSS) -->
+        <!-- Center: audio element -->
         <audio id="player" controls crossorigin="anonymous" preload="metadata" aria-describedby="meta err"></audio>
 
         <!-- Left cluster: speed control -->
@@ -51,7 +53,7 @@
   <!-- Error / status line -->
   <div id="err" role="status" aria-live="polite"></div>
 
-  <!-- Main 3-column panel with resizable gutters -->
+  <!-- Main 2-column panel -->
   <main id="panel">
     <!-- Browser (folders/files) -->
     <section class="card" id="browserCard" aria-labelledby="browserCardTitle">
@@ -67,9 +69,9 @@
       </div>
     </section>
 
-    <!-- Gutter between browser & transcript -->
+    <!-- Gutter between browser & transcript (purely visual if your CSS supports it) -->
     <div id="gutterR" class="gutter" role="separator" aria-orientation="vertical" tabindex="0"
-      aria-label="שינוי רוחב הדפדפן"></div>
+         aria-label="שינוי רוחב הדפדפן"></div>
 
     <!-- Transcript editor -->
     <section class="card" id="transcriptCard" aria-labelledby="transcriptCardTitle">
@@ -77,42 +79,27 @@
         <h2 id="transcriptCardTitle">תמלול</h2>
         <div class="actions" role="group" aria-label="פקדי תמליל">
           <button id="submitBtn" class="pill save" type="button" aria-controls="transcript">⬆️ שמור תיקון</button>
-          <button id="probToggle" class="pill" type="button" aria-pressed="false" title="הדגש ודאות נמוכה">הדגש ודאות
-            נמוכה</button>
+          <button id="probToggle" class="pill" type="button" aria-pressed="false" title="הדגש ודאות נמוכה">
+            הדגש ודאות נמוכה
+          </button>
           <button id="fontMinus" class="pill" type="button" aria-controls="transcript" title="הקטן גופן">A−</button>
           <button id="fontPlus" class="pill" type="button" aria-controls="transcript" title="הגדל גופן">A+</button>
           <!-- Confirmation tools (JS will show/hide) -->
           <button id="markReliable" class="pill" type="button">✅ אשר קטע מסומן</button>
-          <button id="markUnreliable" class="pill" type="button" style = "display: none;">❎ בטל אישור</button>
+          <button id="markUnreliable" class="pill" type="button" style="display:none;">❎ בטל אישור</button>
         </div>
       </div>
 
       <div class="body">
-        <div id="transcript" class="transcript" dir="auto" contenteditable="true" spellcheck="false" aria-label="תצוגת התמליל לעריכה"></div>
-        </div>
-      </div>
-    </section>
-
-    <!-- Gutter between transcript & diff -->
-    <div id="gutterL" class="gutter" role="separator" aria-orientation="vertical" tabindex="0"
-      aria-label="שינוי רוחב אזור ההשוואה"></div>
-
-    <!-- Diff viewer -->
-    <section class="card" id="diffCard" aria-labelledby="diffCardTitle">
-      <div class="head">
-        <h2 id="diffCardTitle">השוואת שינויים לדאטה סט</h2>
-      </div>
-      <div class="body">
-        <div id="diffBody" dir="auto" aria-live="polite" aria-label="תצוגת השוואות"></div>
+        <div id="transcript" class="transcript" dir="auto"
+             contenteditable="true" spellcheck="false"
+             aria-label="תצוגת התמליל לעריכה"></div>
       </div>
     </section>
   </main>
 
-  <!-- Back-to-top floating button -->
-  <button id="scrollTopBtn" class="fab" type="button" aria-label="חזור למעלה" title="למעלה">⬆️</button>
-
   <!-- Settings modal -->
-  <div id="modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+  <div id="modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle" hidden>
     <div class="modal-content" role="document">
       <header class="modal-head">
         <h3 id="settingsTitle">הגדרות</h3>
@@ -132,8 +119,7 @@
   <!-- Optional meta paragraph referenced by audio aria-describedby -->
   <p id="meta" class="visually-hidden">מידע על קובץ האודיו יוצג כאן.</p>
 
-  <!-- Link JS later -->
-  <script type="module" src="script.js"></script>
+  <!-- Module entrypoint -->
+  <script type="module" src="app.js"></script>
 </body>
-
 </html>
