@@ -65,6 +65,7 @@ const MIN_WORD_DUR = 0;
 const PROB_THRESH = 0.95; // paint only when p < 95%
 
 const state = {
+  probThreshold: PROB_THRESH,
   data: { text: '', segments: [] },
 
   // token streams
@@ -97,10 +98,6 @@ const state = {
   // diff baseline
   hfBaselineText: '',
 
-  // undo/redo
-  undoStack: [],
-  redoStack: [],
-
   // prefs
   fontSizeRem: readInitialTextSizeRem(),
 
@@ -119,7 +116,10 @@ const state = {
   _undoGuard: false,        // throttles undo snapshots during typing
   _pendingCaret: null,      // absolute caret offset to restore after re-render
 
-  undoStack: [], redoStack: [],
+  // undo/redo
+  undoStack: [],
+  redoStack: [],
+
   // === add these two ===
   composing: false,
   retokenizeTimer: 0,
@@ -260,7 +260,7 @@ const utils = {
   },
 
   getSelectionOffsetsIn(container) {
-    const sel = getSelection(); if (!sel || !sel.rangeCount) return null;
+    const sel = window.getSelection(); if (!sel || !sel.rangeCount) return null;
     const r = sel.getRangeAt(0);
     const inC = (n) => n && (n === container || container.contains(n));
     if (!(inC(r.startContainer) || inC(r.endContainer))) return null;
@@ -431,7 +431,6 @@ const confirm = {
       p.removeChild(el);
     });
 
-    const text = (state.editBox.innerText || '').replace(/\r/g, '');
     const ranges = (state.confirmedRanges || []).slice().sort((a, b) => a.range[0] - b.range[0]);
 
     const tw = document.createTreeWalker(state.editBox, NodeFilter.SHOW_TEXT, null);
@@ -731,6 +730,7 @@ function normalizeBaselineForDiff(baselineTokens) {
 
 function assignTimesFromAnchors(arr) {
   const isWS = s => /^\s$/u.test(s);
+  const isPlaceable = t => t.state !== 'del' && t.word !== '\n';
 
   const leftNeighbor = (idx) => {
     for (let k = idx - 1; k >= 0; k--) if (isPlaceable(arr[k]) && Number.isFinite(arr[k].end)) return arr[k];
@@ -964,149 +964,6 @@ function tokensToData(tokens) {
 }
 
 /* =========================
-   Mode-less editing rebuild
-   ========================= */
-function requestRebuildFromTranscript() {
-  if (state.modelessComposing) return;      // wait for IME to finish
-  if (state.modelessPending) return;
-  state.modelessPending = true;
-  requestAnimationFrame(() => {
-    state.modelessPending = false;
-    rebuildFromTranscriptNow();
-  });
-}
-
-function rebuildFromTranscriptNow() {
-  const el = els.transcript;
-  if (!el) return;
-
-  // 1) capture selection + new plain text
-  const sel = utils.getSelectionOffsets(el);
-  const newText = utils.plainText(el);
-
-  // 2) rebuild tokens & data from baseline
-  try {
-    state.undoStack.push(JSON.parse(JSON.stringify(state.currentTokens)));
-    state.redoStack.length = 0;
-    state.currentTokens = buildFromBaseline(state.baselineTokens, newText);
-    state.data = tokensToData(state.currentTokens);
-  } catch (err) {
-    console.error('rebuildFromTranscript failed:', err);
-    return;
-  }
-
-  // 3) re-render & re-apply visuals
-  render();
-  renderDiff?.();
-  applyProbHighlights?.();
-  confirm.updateButtons?.();
-
-  // 4) restore selection
-  if (sel) utils.setSelectionByOffsets(el, sel[0], sel[1]);
-}
-
-/* =========================
-   Modeless editing helpers
-   ========================= */
-
-// Extract plain text from #transcript (preserves \n you insert between segments)
-function transcriptPlainText() {
-  const tw = document.createTreeWalker(els.transcript, NodeFilter.SHOW_TEXT, null);
-  let s = '', n;
-  while ((n = tw.nextNode())) s += n.nodeValue;
-  return s.replace(/\r/g, '');
-}
-
-// Absolute offsets of current selection inside #transcript.
-// Returns [start, end] or null if selection is outside the transcript.
-function getSelectionOffsetsInTranscript() {
-  const sel = window.getSelection?.();
-  if (!sel || sel.rangeCount === 0) return null;
-  const r = sel.getRangeAt(0);
-  const inC = (node) => node && (node === els.transcript || els.transcript.contains(node));
-  if (!(inC(r.startContainer) || inC(r.endContainer))) return null;
-
-  const probe = document.createRange();
-  probe.selectNodeContents(els.transcript);
-
-  const toAbs = (node, off) => {
-    try { probe.setEnd(node, off); } catch { return 0; }
-    return probe.toString().length;
-  };
-
-  const s = toAbs(r.startContainer, r.startOffset);
-  const e = toAbs(r.endContainer, r.endOffset);
-  return s === e ? [s, s] : [Math.min(s, e), Math.max(s, e)];
-}
-
-// Map absolute offset -> DOM position after we re-render.
-function domPosAtOffset(container, absOffset) {
-  const text = (() => {
-    const tw = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null);
-    let s = '', n;
-    while ((n = tw.nextNode())) s += n.nodeValue;
-    return s;
-  })();
-  const target = Math.max(0, Math.min(absOffset, text.length));
-  const tw = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null);
-  let node, count = 0;
-  while ((node = tw.nextNode())) {
-    const len = node.nodeValue.length;
-    if (count + len >= target) return [node, target - count];
-    count += len;
-  }
-  const last = container.lastChild;
-  return (last && last.nodeType === Node.TEXT_NODE)
-    ? [last, last.nodeValue.length]
-    : [container, (container.textContent || '').length];
-}
-
-function placeCaretInTranscript(absOffset) {
-  const [node, off] = domPosAtOffset(els.transcript, absOffset);
-  const sel = window.getSelection();
-  const range = document.createRange();
-  try {
-    range.setStart(node, off);
-    range.collapse(true);
-    sel.removeAllRanges();
-    sel.addRange(range);
-  } catch { /* ignore */ }
-  els.transcript.focus();
-}
-
-// Apply user edits live: read text from DOM, diff vs baseline, rebuild tokens, render, restore caret, update diff
-function handleLiveEdit() {
-  const newText = transcriptPlainText();
-  const curText = wordsToText(state.currentTokens.filter(t => t.state !== 'del'));
-  if (newText === curText) return;
-
-  // coalesce undo snapshots while typing
-  if (!state._undoGuard) {
-    state.undoStack.push(snapshot());
-    state.redoStack = [];
-    state._undoGuard = true;
-    setTimeout(() => { state._undoGuard = false; }, 400);
-  }
-
-  // rebuild from baseline and re-render
-  state.currentTokens = buildFromBaseline(state.baselineTokens, newText);
-  state.data = tokensToData(state.currentTokens);
-
-  // we captured desired caret position earlier into state._pendingCaret
-  const restoreTo = state._pendingCaret;
-
-  render();
-  renderDiff();
-  confirm?.applyHighlights?.();
-  confirm?.updateButtons?.();
-
-  if (Number.isFinite(restoreTo)) {
-    // restore after the new DOM is in place
-    requestAnimationFrame(() => placeCaretInTranscript(restoreTo));
-  }
-}
-
-/* =========================
    Rendering & Diff
    ========================= */
 function render() {
@@ -1162,19 +1019,6 @@ function render() {
   confirm.updateButtons?.();
 }
 
-function getCurrentPlainText() {
-  // If we’re editing, read exactly what’s in the edit box (including newlines).
-  if (state.editBox && state.editingFull.active) {
-    // Walk text nodes to avoid accidental HTML side-effects
-    const tw = document.createTreeWalker(state.editBox, NodeFilter.SHOW_TEXT, null);
-    let s = '', n;
-    while ((n = tw.nextNode())) s += n.nodeValue;
-    return s.replace(/\r/g, '');
-  }
-  // Otherwise, rebuild from tokens (ignoring deleted tokens)
-  return wordsToText(state.currentTokens.filter(t => t.state !== 'del'));
-}
-
 function renderDiff(curText /* optional */) {
   if (!els.diffBody) return;
 
@@ -1212,25 +1056,26 @@ function applyProbHighlights() {
   const root = els.transcript;
   if (!root) return;
 
-  // one class on the container controls whether CSS paints anything
   root.classList.toggle('prob-on', !!state.probEnabled);
 
-  const baseAlpha = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--prob-alpha')) || 0.6;
+  const baseAlpha =
+    parseFloat(
+      getComputedStyle(document.documentElement).getPropertyValue('--prob-alpha')
+    ) || 0.6;
+
+  const thr = state.probThreshold;
 
   for (const el of state.wordEls) {
+    const p = Number.parseFloat(el.dataset.prob);
     let a = 0;
-    const p = parseFloat(el.dataset.prob);
-    const threshold = state.probThreshold ?? 0.95;
-    if (state.probEnabled || !Number.isFinite(p) || !(p < threshold)) {
+
+    if (state.probEnabled && Number.isFinite(p) && p < thr) {
       a = utils.clamp01((1 - p) * baseAlpha);
     }
-    // if active, suppress so active bg is visible
     if (el.classList.contains('active')) a = 0;
 
-    // set just the alpha var; no inline rgba string
-    el.style.setProperty('--prob-a', String(parseFloat(a.toFixed(2)))); // fixed 2 decimals
-    // nuke any legacy inline background from older code
-    el.style.backgroundColor = '';
+    el.style.setProperty('--prob-a', String(+a.toFixed(2)));
+    el.style.backgroundColor = ''; // let CSS use --prob-a
   }
 }
 
@@ -1312,18 +1157,6 @@ function markFile(filePath, hasCorrection) {
   const el = els.files.querySelector(`[data-file="${fileName}"]`);
   if (!el) return;
   el.style.background = hasCorrection ? 'rgba(0,255,0,.08)' : 'rgba(255,0,0,.08)';
-}
-
-async function fetchCorrections(filePaths) {
-  const out = [];
-  const chunk = 50;
-  for (let i = 0; i < filePaths.length; i += chunk) {
-    const part = filePaths.slice(i, i + chunk);
-    const { data, error } = await supa.from('corrections').select('file_path').in('file_path', part);
-    if (error) throw error;
-    out.push(...(data || []));
-  }
-  return out;
 }
 
 async function loadAllCorrections() {
@@ -1651,6 +1484,26 @@ function setupPlayerAndControls() {
   //   Modeless editing setup
   // =========================
 
+  function getSelectionOffsetsInTranscript() {
+    const sel = window.getSelection?.();
+    if (!sel || sel.rangeCount === 0) return null;
+    const r = sel.getRangeAt(0);
+    const inC = (node) => node && (node === els.transcript || els.transcript.contains(node));
+    if (!(inC(r.startContainer) || inC(r.endContainer))) return null;
+
+    const probe = document.createRange();
+    probe.selectNodeContents(els.transcript);
+
+    const toAbs = (node, off) => {
+      try { probe.setEnd(node, off); } catch { return 0; }
+      return probe.toString().length;
+    };
+
+    const s = toAbs(r.startContainer, r.startOffset);
+    const e = toAbs(r.endContainer, r.endOffset);
+    return s === e ? [s, s] : [Math.min(s, e), Math.max(s, e)];
+  }
+
   function scheduleModelSync(delay = 180) {
     clearTimeout(state.retokenizeTimer);
     state.retokenizeTimer = setTimeout(syncModelFromDOM, delay);
@@ -1722,6 +1575,8 @@ function setupPlayerAndControls() {
 
       // optional: update confirm toolbar
       confirm?.updateButtons?.();
+
+      ui.requestRebuildFromTranscript();
     });
 
     // keep confirm toolbar state fresh as user changes selection
@@ -1783,7 +1638,7 @@ function setupPlayerAndControls() {
     els.probToggle.setAttribute('aria-pressed', String(state.probEnabled));
     els.probToggle.addEventListener('click', () => {
       state.probEnabled = !state.probEnabled;
-      localStorage.setItem(LS_PROBHL, state.probEnabled ? 'on' : 'off');
+      localStorage.setItem(localStorage.getItem('probHL'), state.probEnabled ? 'on' : 'off');
       els.probToggle.setAttribute('aria-pressed', String(state.probEnabled));
       applyProbHighlights();
     });
@@ -1881,15 +1736,10 @@ els.transcript.addEventListener('contextmenu', (e) => {
     e.preventDefault();   // stops default context menu
   }
 });
+
 // IME-safe composition gating
 els.transcript.addEventListener('compositionstart', () => { ui._composing = true; });
 els.transcript.addEventListener('compositionend', () => { ui._composing = false; ui.requestRebuildFromTranscript(); });
-
-// Rebuild only on real text changes
-els.transcript.addEventListener('input', (e) => {
-  // Only handle text-affecting inputs; ignore pure selection changes
-  ui.requestRebuildFromTranscript();
-});
 
 /* Undo/redo */
 document.addEventListener('keydown', (e) => {
@@ -1913,7 +1763,8 @@ document.addEventListener('keydown', (e) => {
       state.undoStack.push(snapshot());
       state.currentTokens = state.redoStack.pop();
       state.data = tokensToData(state.currentTokens);
-      render(); renderDiff();
+      render();
+      renderDiff();
       if (state.editBox) state.editBox.textContent = getFullText();
     }
   }
