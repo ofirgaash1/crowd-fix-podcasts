@@ -83,7 +83,7 @@ class Store {
     const res = mutator(draft);
     this.#state = res || draft;
     for (const s of this.#subs) {
-      try { s(this.#state); } catch {}
+      try { s(this.#state); } catch { }
     }
     return this.#state;
   }
@@ -173,6 +173,23 @@ class Store {
     });
   }
 }
+
+// Add: tokens setter for worker alignment results
+// (keep this block ABOVE the singleton export or directly above/below works too)
+Store.prototype.setTokens = function (tokens) {
+  const arr = Array.isArray(tokens) ? tokens : [];
+  this.state.tokens = arr;
+  // derive plain text from non-deleted tokens
+  this.state.text = arr
+    .filter(t => t && t.state !== 'del')
+    .map(t => t.word || '')
+    .join('');
+  // notify listeners just like other setters
+  if (typeof this.emit === 'function') {
+    this.emit('tokens', this.state.tokens);
+    this.emit('text', this.state.text);
+  }
+};
 
 // Export a singleton store (simple and enough for this app).
 export const store = new Store();
