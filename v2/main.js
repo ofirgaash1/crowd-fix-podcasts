@@ -6,6 +6,23 @@ import { ScrollVirtualizer } from './render/virtualizer.js';
 import { renderDiffHTML } from './render/diff-panel.js';
 import { setupPlayerSync } from './player/sync.js'; // <-- ADD
 
+/* =========================================================================
+   Debounce helper (leading/trailing aware)
+   ========================================================================= */
+function makeDebounce(fn, wait = 150) {
+  let t = 0, pendingLeading = false;
+  const debounced = (ms, leading = false) => {
+    const delay = (typeof ms === 'number') ? ms : wait;
+    if (leading && !pendingLeading) {
+      pendingLeading = true;
+      fn().finally(() => { pendingLeading = false; });
+      return;
+    }
+    clearTimeout(t);
+    t = setTimeout(fn, delay);
+  };
+  return debounced;
+}
 
 /* =========================================================================
    DOM
@@ -28,9 +45,27 @@ function initWorkers() {
 
   let msgId = 1;
   const pending = new Map(); // id -> { resolve, reject, kind }
+  let diffReady = false;
+  let alignReady = false;
+
+  // Initialize workers with baseline
+  try {
+    diffW.postMessage({ type: 'init', baselineText: '' });
+    alignW.postMessage({ type: 'init', baselineTokens: [] });
+  } catch (err) {
+    console.warn('Worker initialization failed:', err);
+  }
 
   function handleMessage(ev, kind) {
     const { id, type } = ev.data || {};
+    
+    // Handle initialization responses
+    if (type === `${kind}:ready`) {
+      if (kind === 'diff') diffReady = true;
+      else if (kind === 'align') alignReady = true;
+      return;
+    }
+    
     if (!id || !pending.has(id)) return;
     const entry = pending.get(id);
     if (entry.kind !== kind) return;
@@ -48,17 +83,31 @@ function initWorkers() {
   alignW.onerror = () => { const e = new Error('Align worker crashed'); for (const v of pending.values()) if (v.kind==='align') v.reject(e); };
 
   const sendDiff = (base, current, options) => {
+    if (!diffReady) {
+      return Promise.reject(new Error('Diff worker not ready'));
+    }
     const id = msgId++;
-    const payload = { id, type: 'diff', base, current, options };
+    const payload = { id, type: 'diff', text: current, options };
     return new Promise((resolve, reject) => {
       pending.set(id, { resolve, reject, kind: 'diff' });
       diffW.postMessage(payload);
     });
   };
 
+  const setDiffBaseline = (baselineText) => {
+    diffW.postMessage({ type: 'setBaseline', baselineText });
+  };
+
+  const setAlignBaseline = (baselineTokens) => {
+    alignW.postMessage({ type: 'setBaseline', baselineTokens });
+  };
+
   const sendAlign = (baselineTokens, currentText) => {
+    if (!alignReady) {
+      return Promise.reject(new Error('Align worker not ready'));
+    }
     const id = msgId++;
-    const payload = { id, type: 'align', baselineTokens, currentText };
+    const payload = { id, type: 'align', text: currentText };
     return new Promise((resolve, reject) => {
       pending.set(id, { resolve, reject, kind: 'align' });
       alignW.postMessage(payload);
@@ -73,8 +122,8 @@ function initWorkers() {
   };
 
   return {
-    diff:  { send: sendDiff  },
-    align: { send: sendAlign },
+    diff:  { send: sendDiff, setBaseline: setDiffBaseline },
+    align: { send: sendAlign, setBaseline: setAlignBaseline },
     terminateAll,
   };
 }
@@ -157,8 +206,12 @@ function setupEditorPipeline({ workers, virtualizer }) {
   const scheduleDiffSync = makeDebounce(async () => {
     const st = getState();
     if (!st.baselineText) { renderDiffHTML(els.diffBody, []); return; }
+    
+    // Update baseline if it changed
+    workers.diff.setBaseline(st.baselineText);
+    
     try {
-      const { diffs } = await workers.diff.send(st.baselineText, st.liveText, { timeoutMs: 800, editCost: 8 });
+      const { diffs } = await workers.diff.send(st.baselineText, st.liveText, { timeoutSec: 0.8, editCost: 8 });
       renderDiffHTML(els.diffBody, diffs);
     } catch (err) {
       // Keep UI responsive; show nothing on error
@@ -173,6 +226,9 @@ function setupEditorPipeline({ workers, virtualizer }) {
 
     // Preserve caret across DOM rebuild
     const sel = getSelectionOffsets(els.transcript);
+
+    // Update baseline if it changed
+    workers.align.setBaseline(st.baselineTokens);
 
     try {
       const { tokens } = await workers.align.send(st.baselineTokens, st.liveText);
@@ -228,23 +284,7 @@ function setupEditorPipeline({ workers, virtualizer }) {
   }
 }
 
-/* =========================================================================
-   Debounce helper (leading/trailing aware)
-   ========================================================================= */
-function makeDebounce(fn, wait = 150) {
-  let t = 0, pendingLeading = false;
-  const debounced = (ms, leading = false) => {
-    const delay = (typeof ms === 'number') ? ms : wait;
-    if (leading && !pendingLeading) {
-      pendingLeading = true;
-      fn().finally(() => { pendingLeading = false; });
-      return;
-    }
-    clearTimeout(t);
-    t = setTimeout(fn, delay);
-  };
-  return debounced;
-}
+
 
 /* =========================================================================
    Boot
@@ -253,6 +293,24 @@ const workers = initWorkers();
 
 // Virtualized transcript view subscribes to store and paints tokens.
 const virtualizer = new ScrollVirtualizer({ container: els.transcript });
+
+// Subscribe to store updates
+store.subscribe((state, tag) => {
+  if (tag === 'tokens' || tag === 'baseline') {
+    const tokens = state.tokens && state.tokens.length ? state.tokens : 
+                   (state.baselineTokens && state.baselineTokens.length ? state.baselineTokens : []);
+    virtualizer.setTokens(tokens);
+  }
+  if (tag === 'settings:probEnabled') {
+    virtualizer.setProbEnabled(!!state.settings?.probEnabled);
+  }
+  if (tag === 'settings:probThreshold') {
+    virtualizer.setProbThreshold(state.settings?.probThreshold);
+  }
+  if (tag === 'confirmedRanges') {
+    virtualizer.setConfirmedRanges(state.confirmedRanges);
+  }
+});
 
 // Player sync: keeps store.playback in sync + handles CustomEvent('v2:seek')
 let playerCtrl = null;
@@ -264,17 +322,7 @@ if (els.player) {
   });
 }
 
-// Initial baseline can be set elsewhere; for demo ensure tokens mirror baselineTokens if present:
-const st0 = getState();
-
-if (Array.isArray(st0.tokens) && st0.tokens.length) {
-  virtualizer.setTokens(st0.tokens);
-} else if (Array.isArray(st0.baselineTokens) && st0.baselineTokens.length) {
-  virtualizer.setTokens(st0.baselineTokens);
-}
-
-// Keep view in sync with settings (prob highlighting)
-virtualizer.setProbEnabled(!!getState().settings?.probEnabled);
+// Initial state will be handled by the store subscription above
 
 
 // Editing pipeline (modeless)

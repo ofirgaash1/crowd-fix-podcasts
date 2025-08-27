@@ -46,13 +46,13 @@ self.onmessage = (ev) => {
       // match settings are used by reattach flows if needed later
       DMP.Match_Threshold = 0.35;
       DMP.Match_Distance = 1000;
-      self.postMessage({ type: 'ready' });
+      self.postMessage({ type: 'diff:ready' });
       return;
     }
 
     if (t === 'setBaseline') {
       baselineText = safeString(msg.baselineText || '');
-      self.postMessage({ type: 'baseline-set' });
+      self.postMessage({ type: 'diff:baseline-set' });
       return;
     }
 
@@ -85,7 +85,7 @@ self.onmessage = (ev) => {
       // NOTE: returning the raw diffs (array of [op, text]) is intentional;
       // the main thread can further transform/token-align as needed.
       self.postMessage({
-        type: 'diff',
+        type: 'diff:result',
         patchText,
         diffs,
         stats
@@ -97,12 +97,8 @@ self.onmessage = (ev) => {
   } catch (err) {
     // Always surface errors in a structured way
     self.postMessage({
-      type: 'error',
-      error: {
-        message: err?.message || String(err),
-        stack: err?.stack || null,
-        kind: 'diff-worker'
-      }
+      type: 'diff:error',
+      message: err?.message || String(err)
     });
   }
 };

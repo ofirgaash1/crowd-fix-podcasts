@@ -277,28 +277,24 @@ self.onmessage = (ev) => {
   try {
     if (msg.type === 'init') {
       baselineTokens = Array.isArray(msg.baselineTokens) ? msg.baselineTokens : [];
-      self.postMessage({ type: 'ready' });
+      self.postMessage({ type: 'align:ready' });
       return;
     }
     if (msg.type === 'setBaseline') {
       baselineTokens = Array.isArray(msg.baselineTokens) ? msg.baselineTokens : [];
-      self.postMessage({ type: 'baseline-set' });
+      self.postMessage({ type: 'align:baseline-set' });
       return;
     }
     if (msg.type === 'align') {
       const text = toString(msg.text || '');
       const result = alignFromBaseline(baselineTokens, text);
-      self.postMessage({ type: 'aligned', tokens: result });
+      self.postMessage({ type: 'align:result', tokens: result });
       return;
     }
   } catch (err) {
     self.postMessage({
-      type: 'error',
-      error: {
-        message: err?.message || String(err),
-        stack: err?.stack || null,
-        kind: 'align-worker'
-      }
+      type: 'align:error',
+      message: err?.message || String(err)
     });
   }
 };

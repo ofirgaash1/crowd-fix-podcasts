@@ -1,0 +1,625 @@
+/* ===========================
+   Root variables & base setup
+   =========================== */
+:root {
+  /* Let form controls, scrollbars etc. use light styling */
+  color-scheme: light;
+
+  /* Layout */
+  --w-nav: 320px;
+  /* browser (folders/files) column width */
+  --w-diff: 360px;
+  /* diff column width */
+
+  /* Typography */
+  --font-body: system-ui, "Segoe UI", "Noto Sans Hebrew", "Rubik", Arial, sans-serif;
+  --text-size: 1.10rem;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* Colors (true light theme) */
+  --bg: #f7f9fc;
+  /* page background */
+  --panel: #ffffff;
+  /* card background */
+  --fg: #0f172a;
+  /* primary text */
+  --muted: #64748b;
+  /* secondary text */
+  --accent: #0ea5e9;
+  /* focus/links */
+  --border: #e5e7eb;
+  /* dividers */
+
+  --pill-bg: #f1f5f9;
+  --save-bg: #daf8c1;
+  --pill-fg: #0f172a;
+  --pill-bg-hover: #e2e8f0;
+
+  /* Diff colors (subtle for light) */
+  --ins-bg: rgba(16, 185, 129, .16);
+  /* green-500 @ ~16% */
+  --del-bg: rgba(239, 68, 68, .15);
+  /* red-500 @ ~15% */
+  --eq-bg: transparent;
+
+  /* Transcript word highlight */
+  --active-bg: rgba(14, 165, 233, .18);
+  /* sky-500 @ ~18% */
+
+  /* Probability highlight (JS reads these) */
+  --prob-color: 255,
+    235,
+    59;
+  /* bright yellow */
+  --prob-alpha: .6;
+
+  /* Elevation (lighter shadows in light mode) */
+  --shadow-1: 0 2px 6px rgba(0, 0, 0, .08);
+  --shadow-2: 0 12px 28px rgba(0, 0, 0, .12);
+}
+
+
+html.theme-dark {
+  color-scheme: dark;
+  --bg: #0b0f14;
+  --fg: #f2f3f5;
+  --panel: #0f141a;
+  --border: #1f2733;
+  --pill-bg: #111821;
+  --pill-fg: #ffffff;
+  --pill-bg-hover: #333333;
+  --hint: #9aa3af;
+  --accent: #38bdf8;
+  --save-bg: #003f05;
+}
+
+html {
+  transition:
+    background-color 0.3s ease-in-out,
+    color 0.3s ease-in-out,
+    border-color 0.3s ease-in-out,
+    box-shadow 0.3s ease-in-out;
+}
+
+body,
+* {
+  transition:
+    background-color 0.3s ease-in-out,
+    color 0.3s ease-in-out,
+    border-color 0.3s ease-in-out,
+    box-shadow 0.3s ease-in-out;
+}
+
+
+/* Respect system dark/light – easy to retheme later */
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f8f8fb;
+    --panel: #ffffff;
+    --muted: #6b7280;
+    --fg: #0b1020;
+    --accent: #2563eb;
+    --border: #e5e7eb;
+    --pill-bg: #f3f4f6;
+    --pill-fg: #111827;
+    --pill-bg-hover: #e5e7eb;
+
+    --ins-bg: rgba(0, 160, 0, .14);
+    --del-bg: rgba(255, 0, 0, .12);
+    --active-bg: rgba(37, 99, 235, .18);
+  }
+}
+
+/* ===========================
+   Base element resets
+   =========================== */
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  color: var(--fg);
+  background: var(--bg);
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  font: 400 15px/1.5 var(--font-body);
+  direction: rtl;
+  display: flex;
+  flex-direction: column;
+  /* header on top, main grows */
+}
+
+/* Dark mode overrides */
+body.dark-mode {
+  --bg: #0b0f14;
+  --fg: #e8eaef;
+  --muted: #a6adbb;
+  --border: #2a313a;
+  --card-bg: #0f141b;
+  --accent: #4db6ff;
+  --diff-ins: rgba(46, 204, 113, .18);
+  --diff-del: rgba(231, 76, 60, .20);
+  --prob-color: 255, 235, 59;
+  /* keep same "highlight yellow" */
+}
+
+/* Utilities */
+.visually-hidden {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0 0 1px 1px) !important;
+  clip-path: inset(50%) !important;
+  border: 0 !important;
+}
+
+.hint {
+  color: var(--muted);
+  font-size: .92em;
+}
+
+.err {
+  color: #ef4444;
+}
+
+/* Buttons */
+button {
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: .35rem .7rem;
+  cursor: pointer;
+}
+
+button:hover {
+  background: var(--pill-bg-hover);
+}
+
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.pill {
+  background: var(--pill-bg);
+  color: var(--pill-fg);
+  border: 1px solid var(--border);
+}
+
+#probToggle[aria-pressed="true"],
+#probToggle[aria-pressed="false"] {
+  pointer-events: auto !important;
+  opacity: 1 !important;
+  cursor: pointer !important;
+}
+
+.save {
+  background: var(--save-bg);
+}
+
+/* ===========================
+   Header / player cluster
+   =========================== */
+header {
+  padding-inline: .2rem;
+  margin-top: 0.2rem;
+}
+
+#playerCard {
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: .75rem;
+  box-shadow: var(--shadow-1);
+}
+
+/* Sticky head pattern used across cards */
+.card .head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: inherit;
+  border-bottom: 1px solid var(--border);
+  padding: 0.2rem .75rem;
+}
+
+/* Transcript head: keep in one row */
+#transcriptCard .head {
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+  /* tiny horizontal gap */
+  justify-content: space-between;
+}
+
+.head h2 {
+  font-weight: 600;
+  font-size: 1.5rem;
+  /* modest size to save height */
+  line-height: 0;
+}
+
+#transcriptCard .head .actions {
+  display: flex;
+  align-items: center;
+  gap: .35rem;
+  margin-inline-start: auto;
+  /* push buttons to the opposite edge in RTL */
+  flex-wrap: wrap;
+  /* avoid wrapping entire head to 2nd line */
+}
+
+/* Player header uses a flex row in RTL.
+   We reverse the row so DOM order (right cluster, audio, left cluster)
+   naturally places controls on far right & left with audio in center. */
+#playerCard .head {
+  display: flex;
+  flex-direction: row-reverse;
+  align-items: center;
+  gap: .5rem;
+}
+
+/* Clusters (right/left) do not stretch */
+#playerCard .cluster {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: .4rem;
+}
+
+/* Center audio stretches but respects min size and shrinks if needed */
+#player {
+  flex: 1 1 40%;
+  min-inline-size: 240px;
+  inline-size: 100%;
+  block-size: 36px;
+}
+
+/* ===========================
+   Status line
+   =========================== */
+#err {
+  padding-inline: .75rem;
+  min-height: 1.25rem;
+}
+
+/* ===========================
+   Main 3-column panel
+   =========================== */
+#panel {
+  /* Fill remaining viewport height under header without magic pixels */
+  flex: 1 1 auto;
+  min-height: 0;
+  /* allow children to scroll */
+  display: grid;
+  grid-template-columns: var(--w-nav) 6px 1fr 6px var(--w-diff);
+  gap: 0;
+  padding-inline: .75rem;
+  align-items: stretch;
+}
+
+/* Cards share look */
+.card {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  /* key to allow .body overflow */
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: .75rem;
+  overflow: hidden;
+  /* keep sticky head edges crisp */
+  box-shadow: var(--shadow-1);
+}
+
+.card .body {
+  padding: .5rem .6rem;
+  overflow: auto;
+  /* each card scrolls independently */
+  min-height: 0;
+}
+
+/* Grid placement: DOM order already matches columns:
+   [browser] [gutterR] [transcript] [gutterL] [diff] */
+
+/* Gutters for resizing */
+.gutter {
+  background: linear-gradient(to left,
+      transparent,
+      transparent 35%,
+      var(--border) 30%,
+      /* start border earlier */
+      var(--border) 70%,
+      /* end border later */
+      transparent 65%);
+  cursor: col-resize;
+  user-select: none;
+  outline: none;
+}
+
+.gutter:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+/* ===========================
+   Browser lists
+   =========================== */
+#browserGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: .5rem;
+  min-height: 0;
+}
+
+#browserGrid .list {
+  border: 1px dashed var(--border);
+  border-radius: .5rem;
+  padding: .25rem;
+  overflow: auto;
+  /* independent scroll */
+  min-height: 0;
+}
+
+#browserGrid .item {
+  display: block;
+  width: 100%;
+  text-align: start;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: .5rem;
+  padding: .35rem .5rem;
+  margin-bottom: 0.25rem;
+}
+
+#browserGrid .item:hover {
+  background: var(--pill-bg-hover);
+}
+
+#browserGrid .item.active {
+  border-color: var(--accent);
+  background: rgba(62, 166, 255, .10);
+}
+
+/* ===========================
+   Transcript
+   =========================== */
+
+#transcript:focus {
+  outline: none;
+  /* removes browser focus outline */
+  box-shadow: none;
+  /* removes Chrome/Safari blue glow */
+}
+
+#transcript {
+  white-space: pre-wrap;
+  font-size: var(--text-size);
+  line-height: 1.5;
+  word-break: break-word;
+  unicode-bidi: isolate;
+}
+
+/* Tokens */
+#transcript .word {
+  padding-inline: .02em;
+  border-radius: .15rem;
+  direction: inherit;
+  unicode-bidi: normal;
+}
+
+#transcript .word.active {
+  background: var(--active-bg);
+  transition:
+    background 0s ease-in-out
+}
+
+/* Active word that is also confirmed → add a subtle green ring */
+#transcript .word.confirmed-active {
+  outline: 2px solid #22c55e;
+  /* Tailwind 'green-500' */
+  outline-offset: 2px;
+  border-radius: .2rem;
+}
+
+/* Probability highlight uses per-word CSS var --prob-a; color comes from --prob-color */
+#transcript.prob-on .word {
+  background-color: rgba(var(--prob-color), var(--prob-a, 0));
+}
+
+/* When a word is active, the active background wins */
+#transcript.prob-on .word.active {
+  background: var(--active-bg);
+}
+
+/* Confirmed ranges (JS wraps spans in edit preview) — green TEXT, no bg */
+#transcript .confirmed,
+#editBox .confirmed {
+  color: var(--ok, #138a36);
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+/* ContentEditable styling for full edit mode */
+#editBox {
+  background: transparent;
+  border: 1px dashed var(--border);
+  border-radius: .5rem;
+  caret-color: var(--accent);
+}
+
+/* ===========================
+   Diff viewer
+   =========================== */
+#diffBody {
+  font-size: var(--text-size);
+  font-family: inherit;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.diff-insert {
+  background: var(--ins-bg);
+}
+
+.diff-delete {
+  background: var(--del-bg);
+  text-decoration: line-through;
+}
+
+.diff-equal {
+  background: var(--eq-bg);
+}
+
+/* ===========================
+   Floating "back to top" button
+   =========================== */
+.fab {
+  position: fixed;
+  inset-inline-end: 1rem;
+  /* RTL-friendly: "end" side */
+  inset-block-end: 1rem;
+  z-index: 40;
+  width: 42px;
+  height: 42px;
+  border-radius: 999px;
+  display: none;
+  /* JS toggles */
+  background: var(--pill-bg);
+  color: var(--pill-fg);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-2);
+}
+
+/* ===========================
+   Modal
+   =========================== */
+
+
+#modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, .45);
+  display: none;
+  /* default CLOSED */
+  place-items: center;
+  z-index: 50;
+}
+
+#modal.open {
+  /* only show when .open is present */
+  display: grid;
+}
+
+#modal .modal-content {
+  background: var(--panel);
+  color: var(--fg);
+  width: min(560px, 92vw);
+  border-radius: .75rem;
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-2);
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+}
+
+.modal-head,
+.modal-foot {
+  padding: .8rem 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.modal-foot {
+  border-top: 1px solid var(--border);
+  border-bottom: 0;
+  display: flex;
+  gap: .5rem;
+  justify-content: start;
+}
+
+.modal-body {
+  padding: 1rem;
+  display: grid;
+  gap: .6rem;
+}
+
+.modal-body input {
+  width: 100%;
+  padding: .5rem .6rem;
+  border-radius: .5rem;
+  border: 1px solid var(--border);
+  background: var(--pill-bg);
+  color: inherit;
+}
+
+/* ===========================
+   Scrollbar styling (optional)
+   =========================== */
+@media (pointer: fine) {
+
+  /* WebKit */
+  .card .body::-webkit-scrollbar,
+  #browserGrid .list::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  .card .body::-webkit-scrollbar-thumb,
+  #browserGrid .list::-webkit-scrollbar-thumb {
+    background: rgba(128, 128, 128, .35);
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+
+  .card .body::-webkit-scrollbar-thumb:hover,
+  #browserGrid .list::-webkit-scrollbar-thumb:hover {
+    background: rgba(128, 128, 128, .55);
+  }
+}
+
+/* If you ever want to hide scrollbars but keep scrollable behavior, add .no-scrollbar */
+.no-scrollbar {
+  scrollbar-width: none;
+  /* Firefox */
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* ===========================
+   Responsive
+   =========================== */
+@media (max-width: 1100px) {
+  :root {
+    --w-nav: 280px;
+    --w-diff: 300px;
+  }
+}
+
+@media (max-width: 900px) {
+
+  /* Stack columns vertically when narrow */
+  #panel {
+    grid-template-columns: 1fr;
+    gap: .75rem;
+  }
+
+  .gutter {
+    display: none;
+  }
+}
