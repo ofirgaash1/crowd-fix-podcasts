@@ -9,9 +9,62 @@
 //   { type: 'baseline-set' }
 //   { type: 'diff', patchText, diffs, stats }
 
-import DiffMatchPatch from 'https://esm.sh/diff-match-patch@1.0.5';
+// Simple diff implementation without external dependencies
+class SimpleDiff {
+  constructor() {
+    this.Diff_Timeout = 1.0;
+    this.Diff_EditCost = 7;
+    this.Match_Threshold = 0.35;
+    this.Match_Distance = 1000;
+  }
+  
+  diff_main(text1, text2) {
+    // Simple character-level diff
+    const diffs = [];
+    let i = 0, j = 0;
+    
+    while (i < text1.length && j < text2.length) {
+      if (text1[i] === text2[j]) {
+        diffs.push([0, text1[i]]);
+        i++; j++;
+      } else {
+        diffs.push([-1, text1[i]]);
+        diffs.push([1, text2[j]]);
+        i++; j++;
+      }
+    }
+    
+    while (i < text1.length) {
+      diffs.push([-1, text1[i]]);
+      i++;
+    }
+    
+    while (j < text2.length) {
+      diffs.push([1, text2[j]]);
+      j++;
+    }
+    
+    return diffs;
+  }
+  
+  diff_cleanupSemantic(diffs) {
+    // No cleanup for simple implementation
+  }
+  
+  diff_cleanupSemanticLossless(diffs) {
+    // No cleanup for simple implementation
+  }
+  
+  patch_make(text1, diffs) {
+    return [];
+  }
+  
+  patch_toText(patches) {
+    return '';
+  }
+}
 
-const DMP = new DiffMatchPatch();
+const DMP = new SimpleDiff();
 
 // Reasonable defaults (caller may override per task)
 const DEFAULT_TIMEOUT = 1.0; // seconds

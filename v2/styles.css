@@ -394,6 +394,26 @@ header {
   background: rgba(62, 166, 255, .10);
 }
 
+#browserGrid .item.error {
+  color: var(--error, #ef4444);
+  font-style: italic;
+}
+
+#browserGrid .item.has-correction {
+  background: rgba(0, 255, 0, 0.08);
+  border-left: 3px solid #22c55e;
+}
+
+#browserGrid .item.no-correction {
+  background: rgba(255, 0, 0, 0.08);
+  border-left: 3px solid #ef4444;
+}
+
+#browserGrid .item.loading {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
 /* ===========================
    Transcript
    =========================== */

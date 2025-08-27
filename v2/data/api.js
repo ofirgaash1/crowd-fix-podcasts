@@ -4,6 +4,8 @@
 
 // ---- Optional Supabase client (pass from your app) ----
 let supa = null;
+let correctionsCache = new Set();
+
 /**
  * Configure Supabase. Call once from app bootstrap:
  *   import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
@@ -11,6 +13,32 @@ let supa = null;
  */
 export function configureSupabase(client) {
   supa = client || null;
+  if (supa) {
+    loadAllCorrections();
+  }
+}
+
+/**
+ * Load all corrections from Supabase to cache
+ */
+async function loadAllCorrections() {
+  if (!supa) return;
+  
+  try {
+    const { data, error } = await supa.from('corrections').select('file_path');
+    if (error) throw error;
+    correctionsCache = new Set((data || []).map(r => r.file_path));
+    console.log('✅ Corrections loaded:', correctionsCache.size);
+  } catch (e) {
+    console.error('❌ Failed to load corrections:', e.message || e);
+  }
+}
+
+/**
+ * Check if a file has corrections
+ */
+export function hasCorrection(filePath) {
+  return correctionsCache.has(filePath);
 }
 
 // ---- HF auth token helpers (read from localStorage like v1) ----
@@ -34,6 +62,34 @@ function normPaths(folder, file) {
   const audioPath = `${folder}/${file}`;
   const trPath = `${folder}/${file.replace(/\.opus$/i, '')}/full_transcript.json.gz`;
   return { audioPath, trPath };
+}
+
+// ---- Folder/File listing helpers ----
+function hfApiUrl(path, ds) {
+  const base = `https://huggingface.co/api/datasets/${DATASET}/${ds}/tree/main`;
+  if (!path) return [base, `${base}?recursive=false`];
+  return [
+    `${base}/${encPath(path)}`,
+    `${base}?path=${encodeURIComponent(path)}`
+  ];
+}
+
+function extractItems(json) {
+  if (Array.isArray(json)) return json;
+  if (json && Array.isArray(json.items)) return json.items;
+  if (json && Array.isArray(json.tree)) return json.tree;
+  if (json && Array.isArray(json.siblings)) return json.siblings;
+  return [];
+}
+
+function filterImmediate(items, base) {
+  const depth = base ? base.split('/').filter(Boolean).length : 0;
+  return items.filter(x => {
+    const p = x.path || x.rpath || '';
+    if (base && !p.startsWith(base + '/')) return false;
+    const d = p.split('/').filter(Boolean).length;
+    return d === depth + 1;
+  });
 }
 
 // ---- Fetch with HF auth if available ----
@@ -72,6 +128,92 @@ async function decodeMaybeGzip(response, originalUrl = '') {
   const buf = await response.arrayBuffer();
   const text = new TextDecoder('utf-8').decode(pako.ungzip(new Uint8Array(buf)));
   return text;
+}
+
+// ---- Folder/File listing functions ----
+/**
+ * List folders in the audio dataset
+ * @returns {Promise<Array<{name: string, type: 'directory'}>>}
+ */
+export async function listFolders() {
+  const urls = hfApiUrl('', DS_AUDIO);
+  let lastErr = null;
+
+  for (const url of urls) {
+    try {
+      const response = await fetchHF(url);
+      
+      if (response.status === 401 && !getHFToken()) {
+        throw new Error('401: נדרש טוקן Hugging Face כדי לטעון את רשימת התיקיות');
+      }
+      if (!response.ok) {
+        lastErr = new Error(`שגיאת רשת (${response.status}) בעת טעינת רשימת תיקיות`);
+        continue;
+      }
+      
+      const data = await response.json();
+      const items = extractItems(data);
+      const dirs = filterImmediate(items, '')
+        .filter(x => (x.type === 'directory' || x.type === 'tree' || x.type === 'dir'))
+        .map(x => x.path.split('/').pop())
+        .sort((a, b) => a.localeCompare(b, 'he'));
+      
+      return dirs.map(name => ({ name, type: 'directory' }));
+    } catch (error) {
+      lastErr = error;
+    }
+  }
+  
+  console.warn('Failed to list folders:', lastErr);
+  throw lastErr || new Error('שגיאה בטעינת רשימת תיקיות');
+}
+
+/**
+ * List audio files in a specific folder
+ * @param {string} folder - folder name
+ * @returns {Promise<Array<{name: string, type: 'file', size: number}>>}
+ */
+export async function listFiles(folder) {
+  if (!folder) return [];
+  
+  const urls = hfApiUrl(folder, DS_AUDIO);
+  let lastErr = null;
+
+  for (const url of urls) {
+    try {
+      const response = await fetchHF(url);
+      
+      if (response.status === 401 && !getHFToken()) {
+        throw new Error('401: נדרש טוקן Hugging Face כדי לטעון את רשימת הקבצים');
+      }
+      if (!response.ok) {
+        lastErr = new Error(`שגיאת רשת (${response.status}) בעת טעינת רשימת קבצים`);
+        continue;
+      }
+      
+      const data = await response.json();
+      const items = extractItems(data);
+      const files = filterImmediate(items, folder)
+        .filter(x => {
+          const t = (x.type || '').toLowerCase();
+          const p = x.path || '';
+          return (t === 'file' || t === 'blob' || t === 'lfs' || p.toLowerCase().endsWith('.opus'));
+        })
+        .map(x => (x.path || '').split('/').pop())
+        .sort((a, b) => a.localeCompare(b, 'he'));
+      
+      return files.map(name => ({ 
+        name, 
+        type: 'file', 
+        size: 0 
+      }));
+    } catch (error) {
+      lastErr = error;
+    }
+  }
+  
+  console.warn('Failed to list files:', lastErr);
+  throw lastErr || new Error('שגיאה בטעינת רשימת קבצים');
 }
 
 // ---- Normalization: transcript JSON → flat tokens -----------------
@@ -249,6 +391,9 @@ export async function loadEpisode({ folder, file }) {
 export const api = {
   configureSupabase,
   loadEpisode,
-  saveCorrectionToDB
+  saveCorrectionToDB,
+  listFolders,
+  listFiles,
+  hasCorrection
 };
 export default api;
