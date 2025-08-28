@@ -354,7 +354,7 @@ function patch_toText_fromDiffs(diffs) {
   try { return JSON.stringify(diffs); } catch { return ''; }
 }
 
-self.onmessage = (ev) => {
+self.onmessage = async (ev) => {
   const msg = ev?.data || {};
   const t = msg.type;
   const id = msg.id;
@@ -457,6 +457,21 @@ self.onmessage = (ev) => {
           console.log(`[diff:${debugTag}] recon.len new`, rn.length, 'old', ro.length);
           console.log(`[diff:${debugTag}] canon.ok new`, okNew, 'old', okOld);
         } catch {}
+      }
+      if (!(okNew && okOld)) {
+        // Fallback 1a: jsdiff word-wise across entire text
+        try {
+          const jsd = await import('https://esm.sh/diff@5');
+          const parts = jsd?.diffWordsWithSpace ? jsd.diffWordsWithSpace(baseText, nextText) : null;
+          if (Array.isArray(parts) && parts.length) {
+            const mapped = normalizeDiffs(parts.map(p => [p.added ? 1 : (p.removed ? -1 : 0), String(p.value || '')]));
+            const rn = (ops) => ops.map(([op,s]) => (op === -1 ? '' : s)).join('');
+            const ro = (ops) => ops.map(([op,s]) => (op === 1 ? '' : s)).join('');
+            if (rn(mapped) === nextText && ro(mapped) === baseText) {
+              diffs = mapped; okNew = okOld = true; strategy = 'fallback:jsdiff-words';
+            }
+          }
+        } catch (e) { if (debugTag) try { console.warn(`[diff:${debugTag}] jsdiff import failed`, e); } catch {} }
       }
       if (!(okNew && okOld)) {
         // Fallback 1: pure char-level trimmed diff
