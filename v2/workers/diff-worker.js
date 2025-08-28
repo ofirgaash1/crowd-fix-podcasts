@@ -81,75 +81,92 @@ function granularDiff(baseText, nextText, dbgTag) {
   const aMid = aLines.slice(pre, aLines.length - post);
   const bMid = bLines.slice(pre, bLines.length - post);
   if (aMid.length || bMid.length) {
-    const lineDiffs = myersDiffSeq(aMid, bMid, (arr) => arr.join(''));
-    const delBuf = [];
-    const insBuf = [];
-    if (dbgTag) {
-      try {
-        const vis = (s) => String(s).replace(/\n/g, '⏎').replace(/ /g, '␠');
-        const sampleOps = lineDiffs.slice(0, 10).map(([op, s]) => [op, vis(String(s).slice(0, 80))]);
-        const cDel = lineDiffs.filter(x=>x[0]===-1).length;
-        const cIns = lineDiffs.filter(x=>x[0]===1).length;
-        const cEq  = lineDiffs.filter(x=>x[0]===0).length;
-        console.log(`[diff:${dbgTag}] lineDiffs.counts del`, cDel, 'ins', cIns, 'eq', cEq);
-        console.log(`[diff:${dbgTag}] lineDiffs.sample`, JSON.stringify(sampleOps));
-      } catch {}
-    }
-    for (const [op, chunk] of lineDiffs) {
+    // Fast path: single-line replacement → go straight to token refinement
+    if (aMid.length === 1 && bMid.length === 1) {
       if (dbgTag) {
-        try { console.log(`[diff:${dbgTag}] lineOp`, op, 'len', String(chunk||'').length); } catch {}
+        try {
+          const vis = (s) => String(s).replace(/\n/g, '⏎').replace(/ /g, '␠');
+          console.log(`[diff:${dbgTag}] single-line refine aMid.len 1 bMid.len 1`);
+          console.log(`[diff:${dbgTag}] aMid[0]`, vis((aMid[0]||'').slice(0, 160)));
+          console.log(`[diff:${dbgTag}] bMid[0]`, vis((bMid[0]||'').slice(0, 160)));
+        } catch {}
       }
-      if (op === 0) {
-        while (delBuf.length) { out.push([-1, delBuf.shift()]); }
-        while (insBuf.length) { out.push([1, insBuf.shift()]); }
-        out.push([0, chunk]);
-        continue;
+      const refined = tokenDiffStrings(aMid[0] || '', bMid[0] || '', dbgTag);
+      for (const d of refined) {
+        const L = out.length; if (L && out[L-1][0] === d[0]) out[L-1][1] += d[1]; else out.push([d[0], d[1]]);
       }
-      if (op === -1) {
-        // If there is an unmatched insertion waiting, refine pair (ins first)
-        if (insBuf.length) {
-          if (dbgTag) { try { console.log(`[diff:${dbgTag}] refining (ins-first)`); } catch {} }
-          const newChunk = insBuf.shift();
+    }
+    else {
+      const lineDiffs = myersDiffSeq(aMid, bMid, (arr) => arr.join(''));
+      const delBuf = [];
+      const insBuf = [];
+      if (dbgTag) {
+        try {
+          const vis = (s) => String(s).replace(/\n/g, '⏎').replace(/ /g, '␠');
+          const sampleOps = lineDiffs.slice(0, 10).map(([op, s]) => [op, vis(String(s).slice(0, 80))]);
+          const cDel = lineDiffs.filter(x=>x[0]===-1).length;
+          const cIns = lineDiffs.filter(x=>x[0]===1).length;
+          const cEq  = lineDiffs.filter(x=>x[0]===0).length;
+          console.log(`[diff:${dbgTag}] lineDiffs.counts del`, cDel, 'ins', cIns, 'eq', cEq);
+          console.log(`[diff:${dbgTag}] lineDiffs.sample`, JSON.stringify(sampleOps));
+        } catch {}
+      }
+      for (const [op, chunk] of lineDiffs) {
+        if (dbgTag) {
+          try { console.log(`[diff:${dbgTag}] lineOp`, op, 'len', String(chunk||'').length); } catch {}
+        }
+        if (op === 0) {
+          while (delBuf.length) { out.push([-1, delBuf.shift()]); }
+          while (insBuf.length) { out.push([1, insBuf.shift()]); }
+          out.push([0, chunk]);
+          continue;
+        }
+        if (op === -1) {
+          // If there is an unmatched insertion waiting, refine pair (ins first)
+          if (insBuf.length) {
+            if (dbgTag) { try { console.log(`[diff:${dbgTag}] refining (ins-first)`); } catch {} }
+            const newChunk = insBuf.shift();
+            if (dbgTag) {
+              try {
+                const vis = (s) => String(s).replace(/\n/g, '⏎').replace(/ /g, '␠');
+                console.log(`[diff:${dbgTag}] refine-lines (ins-first) old.len`, chunk.length, 'new.len', newChunk.length);
+                console.log(`[diff:${dbgTag}] old.preview`, vis(chunk.slice(0, 120)));
+                console.log(`[diff:${dbgTag}] new.preview`, vis(newChunk.slice(0, 120)));
+              } catch {}
+            }
+            const refined = tokenDiffStrings(chunk, newChunk, dbgTag);
+            for (const d of refined) {
+              const L = out.length; if (L && out[L-1][0] === d[0]) out[L-1][1] += d[1]; else out.push([d[0], d[1]]);
+            }
+          } else {
+            delBuf.push(chunk);
+          }
+          continue;
+        }
+        // op === 1
+        if (delBuf.length) {
+          if (dbgTag) { try { console.log(`[diff:${dbgTag}] refining (del-first)`); } catch {} }
+          const oldChunk = delBuf.shift();
           if (dbgTag) {
             try {
               const vis = (s) => String(s).replace(/\n/g, '⏎').replace(/ /g, '␠');
-              console.log(`[diff:${dbgTag}] refine-lines (ins-first) old.len`, chunk.length, 'new.len', newChunk.length);
-              console.log(`[diff:${dbgTag}] old.preview`, vis(chunk.slice(0, 120)));
-              console.log(`[diff:${dbgTag}] new.preview`, vis(newChunk.slice(0, 120)));
+              console.log(`[diff:${dbgTag}] refine-lines old.len`, oldChunk.length, 'new.len', chunk.length);
+              console.log(`[diff:${dbgTag}] old.preview`, vis(oldChunk.slice(0, 120)));
+              console.log(`[diff:${dbgTag}] new.preview`, vis(chunk.slice(0, 120)));
             } catch {}
           }
-          const refined = tokenDiffStrings(chunk, newChunk, dbgTag);
+          const refined = tokenDiffStrings(oldChunk, chunk, dbgTag);
           for (const d of refined) {
             const L = out.length; if (L && out[L-1][0] === d[0]) out[L-1][1] += d[1]; else out.push([d[0], d[1]]);
           }
         } else {
-          delBuf.push(chunk);
+          insBuf.push(chunk);
         }
-        continue;
       }
-      // op === 1
-      if (delBuf.length) {
-        if (dbgTag) { try { console.log(`[diff:${dbgTag}] refining (del-first)`); } catch {} }
-        const oldChunk = delBuf.shift();
-        if (dbgTag) {
-          try {
-            const vis = (s) => String(s).replace(/\n/g, '⏎').replace(/ /g, '␠');
-            console.log(`[diff:${dbgTag}] refine-lines old.len`, oldChunk.length, 'new.len', chunk.length);
-            console.log(`[diff:${dbgTag}] old.preview`, vis(oldChunk.slice(0, 120)));
-            console.log(`[diff:${dbgTag}] new.preview`, vis(chunk.slice(0, 120)));
-          } catch {}
-        }
-        const refined = tokenDiffStrings(oldChunk, chunk, dbgTag);
-        for (const d of refined) {
-          const L = out.length; if (L && out[L-1][0] === d[0]) out[L-1][1] += d[1]; else out.push([d[0], d[1]]);
-        }
-      } else {
-        insBuf.push(chunk);
-      }
+      // Flush any remaining unmatched runs
+      while (delBuf.length) { out.push([-1, delBuf.shift()]); }
+      while (insBuf.length) { out.push([1, insBuf.shift()]); }
     }
-    // Flush any remaining unmatched runs
-    while (delBuf.length) { out.push([-1, delBuf.shift()]); }
-    while (insBuf.length) { out.push([1, insBuf.shift()]); }
   }
 
   if (post) out.push([0, aLines.slice(aLines.length - post).join('')]);
