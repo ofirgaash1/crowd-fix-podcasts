@@ -28,6 +28,68 @@ function toTokens(s) {
   }
 }
 
+function splitLinesKeepNL(s) {
+  const parts = String(s || '').split('\n');
+  const out = [];
+  for (let i = 0; i < parts.length; i++) {
+    const isLast = (i === parts.length - 1);
+    const seg = isLast ? parts[i] : (parts[i] + '\n');
+    out.push(seg);
+  }
+  return out;
+}
+
+// Token-level diff for a single line-sized string
+function tokenDiffStrings(aStr, bStr) {
+  const aTokAll = toTokens(aStr);
+  const bTokAll = toTokens(bStr);
+  const preTok = commonPrefixLen(aTokAll, bTokAll);
+  const aTokTail = aTokAll.slice(preTok);
+  const bTokTail = bTokAll.slice(preTok);
+  const postTok = commonSuffixLen(aTokTail, bTokTail);
+  const aTokMid = aTokAll.slice(preTok, aTokAll.length - postTok);
+  const bTokMid = bTokAll.slice(preTok, bTokAll.length - postTok);
+  let diffs = myersDiffSeq(aTokMid, bTokMid, (arr) => arr.join(''));
+  if (preTok) diffs.unshift([0, aTokAll.slice(0, preTok).join('')]);
+  if (postTok) diffs.push([0, aTokAll.slice(aTokAll.length - postTok).join('')]);
+  return diffs;
+}
+
+// Granular diff: line-level pairing with token-level refinement inside changed lines
+function granularDiff(baseText, nextText) {
+  const aLines = splitLinesKeepNL(baseText);
+  const bLines = splitLinesKeepNL(nextText);
+  const lineDiffs = myersDiffSeq(aLines, bLines, (arr) => arr.join(''));
+  const out = [];
+  const delBuf = [];
+  for (const [op, chunk] of lineDiffs) {
+    if (op === 0) {
+      // Flush any pending deletes
+      while (delBuf.length) { out.push([-1, delBuf.shift()]); }
+      out.push([0, chunk]);
+      continue;
+    }
+    if (op === -1) { delBuf.push(chunk); continue; }
+    // op === 1 -> insertion; pair it with a pending delete if present
+    if (delBuf.length) {
+      const oldLine = delBuf.shift();
+      const refined = tokenDiffStrings(oldLine, chunk);
+      // Coalesce adjacent same-op runs with previous out tail if needed
+      for (const d of refined) {
+        const L = out.length;
+        if (L && out[L-1][0] === d[0]) out[L-1][1] += d[1]; else out.push([d[0], d[1]]);
+      }
+      // If more deletes remain (multiple lines deleted vs one inserted), flush them
+      while (delBuf.length) { out.push([-1, delBuf.shift()]); }
+    } else {
+      out.push([1, chunk]);
+    }
+  }
+  // Flush trailing deletes
+  while (delBuf.length) { out.push([-1, delBuf.shift()]); }
+  return out;
+}
+
 function commonPrefixLen(a, b) {
   const L = Math.min(a.length, b.length);
   let i = 0;
@@ -168,42 +230,37 @@ self.onmessage = (ev) => {
       const editCost = Number(msg?.options?.editCost);
       void timeout; void editCost;
 
-      // Prefer token-level diff for nicer, word-aware chunks
-      const aTokAll = toTokens(baseText);
-      const bTokAll = toTokens(nextText);
-      const preTok = commonPrefixLen(aTokAll, bTokAll);
-      const aTokTail = aTokAll.slice(preTok);
-      const bTokTail = bTokAll.slice(preTok);
-      const postTok = commonSuffixLen(aTokTail, bTokTail);
-      const aTokMid = aTokAll.slice(preTok, aTokAll.length - postTok);
-      const bTokMid = bTokAll.slice(preTok, bTokAll.length - postTok);
-
-      let diffs;
-      const sumTok = aTokMid.length + bTokMid.length;
-      if (sumTok <= 20000) {
-        // Token-level Myers, join tokens back to string
-        diffs = myersDiffSeq(aTokMid, bTokMid, (arr) => arr.join(''));
-        // Reattach token prefix/suffix
-        if (preTok) diffs.unshift([0, aTokAll.slice(0, preTok).join('')]);
-        if (postTok) diffs.push([0, aTokAll.slice(aTokAll.length - postTok).join('')]);
-      } else {
-        // Fallback to char-level trimmed diff when token count too big
-        const aChars = toChars(baseText);
-        const bChars = toChars(nextText);
-        const pre = commonPrefixLen(aChars, bChars);
-        const aMid = aChars.slice(pre);
-        const bMid = bChars.slice(pre);
-        const post = commonSuffixLen(aMid, bMid);
-        const aC = aChars.slice(pre, aChars.length - post);
-        const bC = bChars.slice(pre, bChars.length - post);
-        const sumChars = aC.length + bC.length;
-        if (sumChars <= 16000) {
-          diffs = myersDiffSeq(aC, bC, (arr) => arr.join(''));
+      // Prefer granular (line+token) diffs for readability
+      let diffs = granularDiff(baseText, nextText);
+      // If something goes wrong (unlikely), fall back to previous strategies
+      if (!Array.isArray(diffs) || diffs.length === 0) {
+        const aTokAll = toTokens(baseText);
+        const bTokAll = toTokens(nextText);
+        const preTok = commonPrefixLen(aTokAll, bTokAll);
+        const aTokTail = aTokAll.slice(preTok);
+        const bTokTail = bTokAll.slice(preTok);
+        const postTok = commonSuffixLen(aTokTail, bTokTail);
+        const aTokMid = aTokAll.slice(preTok, aTokAll.length - postTok);
+        const bTokMid = bTokAll.slice(preTok, bTokAll.length - postTok);
+        const sumTok = aTokMid.length + bTokMid.length;
+        if (sumTok <= 20000) {
+          diffs = myersDiffSeq(aTokMid, bTokMid, (arr) => arr.join(''));
+          if (preTok) diffs.unshift([0, aTokAll.slice(0, preTok).join('')]);
+          if (postTok) diffs.push([0, aTokAll.slice(aTokAll.length - postTok).join('')]);
         } else {
-          diffs = simpleGreedyDiff(aC.join(''), bC.join(''));
+          const aChars = toChars(baseText);
+          const bChars = toChars(nextText);
+          const pre = commonPrefixLen(aChars, bChars);
+          const aMid = aChars.slice(pre);
+          const bMid = bChars.slice(pre);
+          const post = commonSuffixLen(aMid, bMid);
+          const aC = aChars.slice(pre, aChars.length - post);
+          const bC = bChars.slice(pre, bChars.length - post);
+          const sumChars = aC.length + bC.length;
+          diffs = (sumChars <= 16000) ? myersDiffSeq(aC, bC, (arr) => arr.join('')) : simpleGreedyDiff(aC.join(''), bC.join(''));
+          if (pre) diffs.unshift([0, aChars.slice(0, pre).join('')]);
+          if (post) diffs.push([0, aChars.slice(aChars.length - post).join('')]);
         }
-        if (pre) diffs.unshift([0, aChars.slice(0, pre).join('')]);
-        if (post) diffs.push([0, aChars.slice(aChars.length - post).join('')]);
       }
       // Validate reconstruction (with canonicalization to avoid false negatives)
       const canon = (s) => {
