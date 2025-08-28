@@ -13,11 +13,16 @@ export class ScrollVirtualizer {
     if (!container) throw new Error('ScrollVirtualizer: container is required');
 
     this.container = container;
-    this.renderer = renderer || new OverlayRenderer({ container });
+    this.renderer = renderer || new OverlayRenderer({ container, windowSize: 800 });
 
     // cached inputs
     this.tokens = [];
     this.absIndex = [];
+
+    // windowing helpers
+    this.windowSize = 800;
+    this._onScroll = this._onScroll?.bind ? this._onScroll.bind(this) : () => {};
+    container.addEventListener('scroll', () => this._onScroll(), { passive: true });
   }
 
   /** Replace tokens and repaint everything */
@@ -25,7 +30,10 @@ export class ScrollVirtualizer {
     this.tokens = Array.isArray(tokens) ? tokens : [];
     this.absIndex = computeAbsIndexMap(this.tokens);
     this.renderer.setContainer(this.container);
+    const t0 = performance.now();
     this.renderer.setTokens(this.tokens, this.absIndex);
+    this._lastRenderMs = performance.now() - t0;
+    this._updateWindowFromScroll();
   }
 
   /** Update confirmed ranges and repaint markings */
@@ -46,6 +54,33 @@ export class ScrollVirtualizer {
   /** Karaoke pointer */
   updateActiveIndex(i) {
     this.renderer.updateActiveIndex(i);
+  }
+
+  /** Stats for dev HUD */
+  getStats() {
+    return {
+      tokens: (this.tokens || []).length,
+      spans: typeof this.renderer.getRenderedCount === 'function' ? this.renderer.getRenderedCount() : (this.tokens || []).length,
+      renderMs: this._lastRenderMs || 0
+    };
+  }
+
+  _onScroll() {
+    if (this._scrollThrottle) return;
+    this._scrollThrottle = true;
+    setTimeout(() => { this._scrollThrottle = false; this._updateWindowFromScroll(); }, 60);
+  }
+
+  _updateWindowFromScroll() {
+    const totalTokens = (this.tokens || []).length;
+    if (!totalTokens) return;
+    const maxStart = Math.max(0, totalTokens - this.windowSize);
+    const el = this.container;
+    const sh = el.scrollHeight - el.clientHeight;
+    const ratio = sh > 0 ? Math.max(0, Math.min(1, el.scrollTop / sh)) : 0;
+    const start = Math.floor(ratio * maxStart);
+    this.renderer.setWindowSize(this.windowSize);
+    this.renderer.setWindowStart(start);
   }
 
   /** Cleanup hook (kept minimal; OverlayRenderer owns the DOM) */

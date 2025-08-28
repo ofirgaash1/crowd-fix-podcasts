@@ -74,7 +74,7 @@
     <!-- Transcript editor -->
     <section class="card" id="transcriptCard" aria-labelledby="transcriptCardTitle">
       <div class="head">
-        <h2 id="transcriptCardTitle">תמלול</h2>
+        <h2 id="transcriptCardTitle">תמלול <span id="versionBadge" class="hint"></span></h2>
         <div class="actions" role="group" aria-label="פקדי תמליל">
           <button id="submitBtn" class="pill save" type="button" aria-controls="transcript">⬆️ שמור תיקון</button>
           <button id="probToggle" class="pill" type="button" aria-pressed="false" title="הדגש ודאות נמוכה">הדגש ודאות
@@ -101,6 +101,9 @@
     <section class="card" id="diffCard" aria-labelledby="diffCardTitle">
       <div class="head">
         <h2 id="diffCardTitle">השוואת שינויים לדאטה סט</h2>
+        <div class="actions" role="group" aria-label="פקדי השוואה">
+          <button id="showLayersBtn" class="pill" type="button" title="הצג שכבות שינויים">הצג שכבות שינויים</button>
+        </div>
       </div>
       <div class="body">
         <div id="diffBody" dir="auto" aria-live="polite" aria-label="תצוגת השוואות"></div>
@@ -110,6 +113,12 @@
 
   <!-- Back-to-top floating button -->
   <button id="scrollTopBtn" class="fab" type="button" aria-label="חזור למעלה" title="למעלה">⬆️</button>
+
+  <!-- Toast notifications -->
+  <div id="toastContainer" class="toast-container" aria-live="polite" aria-atomic="true"></div>
+
+  <!-- Dev metrics HUD (toggle with Ctrl+Alt+D) -->
+  <div id="hud" class="hud" aria-hidden="true" style="display:none"></div>
 
   <!-- Settings modal -->
   <div id="modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">

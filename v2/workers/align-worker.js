@@ -274,25 +274,27 @@ function alignFromBaseline(baseline, newText) {
 
 self.onmessage = (ev) => {
   const msg = ev?.data || {};
+  const id = msg.id;
   try {
     if (msg.type === 'init') {
       baselineTokens = Array.isArray(msg.baselineTokens) ? msg.baselineTokens : [];
-      self.postMessage({ type: 'align:ready' });
+      self.postMessage({ id, type: 'align:ready' });
       return;
     }
     if (msg.type === 'setBaseline') {
       baselineTokens = Array.isArray(msg.baselineTokens) ? msg.baselineTokens : [];
-      self.postMessage({ type: 'align:baseline-set' });
+      self.postMessage({ id, type: 'align:baseline-set' });
       return;
     }
     if (msg.type === 'align') {
       const text = toString(msg.text || '');
       const result = alignFromBaseline(baselineTokens, text);
-      self.postMessage({ type: 'align:result', tokens: result });
+      self.postMessage({ id, type: 'align:result', tokens: result });
       return;
     }
   } catch (err) {
     self.postMessage({
+      id,
       type: 'align:error',
       message: err?.message || String(err)
     });

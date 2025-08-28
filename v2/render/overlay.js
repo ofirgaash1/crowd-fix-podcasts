@@ -60,6 +60,10 @@ export class OverlayRenderer {
     this._probRGB = getCssVar('--prob-color', '255,235,59'); // RGB only
     const base = parseFloat(getCssVar('--prob-alpha', '0.6'));
     this._probBaseAlpha = Number.isFinite(base) ? base : 0.6;
+
+    // windowing (virtualization)
+    this.windowStart = 0;
+    this.windowSize = Math.max(200, Math.min(2000, opts.windowSize || 800));
   }
 
   /** attach/replace the container element */
@@ -74,6 +78,19 @@ export class OverlayRenderer {
       ? absIndex
       : computeAbsIndexMap(this.tokens);
     this.renderAll();
+  }
+
+  /** set virtual window size in tokens */
+  setWindowSize(n) {
+    const v = Math.max(200, Math.min(5000, Math.floor(n || 800)));
+    if (v !== this.windowSize) { this.windowSize = v; this.renderAll(); }
+  }
+
+  /** set start index for window */
+  setWindowStart(i) {
+    const maxStart = Math.max(0, (this.tokens?.length || 0) - 1);
+    const s = Math.max(0, Math.min(maxStart, Math.floor(i || 0)));
+    if (s !== this.windowStart) { this.windowStart = s; this.renderAll(); }
   }
 
   /** set confirmed ranges (array of {range:[start,end], ...}) */
@@ -102,6 +119,12 @@ export class OverlayRenderer {
     if (this.activeIndex >= 0) {
       const prev = this._spanByIndex.get(this.activeIndex);
       if (prev) prev.classList.remove('active', 'confirmed-active');
+      // restore probability background on previously active word
+      if (prev) {
+        const t = this.tokens[this.activeIndex];
+        const p = t && Number.isFinite(t.probability) ? +t.probability : NaN;
+        paintProb(prev, p, this.probEnabled, this.probThreshold, this._probRGB, this._probBaseAlpha);
+      }
     }
 
     this.activeIndex = i;
@@ -110,6 +133,8 @@ export class OverlayRenderer {
       const el = this._spanByIndex.get(i);
       if (el) {
         el.classList.add('active');
+        // suppress probability tint while active so active bg is visible
+        el.style.backgroundColor = '';
         // if also confirmed → add ring
         if (el.classList.contains('confirmed')) {
           el.classList.add('confirmed-active');
@@ -118,12 +143,22 @@ export class OverlayRenderer {
     }
   }
 
+  /** lightweight stats for dev HUD */
+  getRenderedCount() {
+    return this._spanByIndex ? this._spanByIndex.size : 0;
+  }
+
   /** re-apply probability backgrounds across existing spans */
   repaintProb() {
     if (!this.container) return;
     for (const [ti, el] of this._spanByIndex) {
       const t = this.tokens[ti];
       if (!t) continue;
+      // If active, let active background show (no prob tint)
+      if (ti === this.activeIndex || el.classList.contains('active')) {
+        el.style.backgroundColor = '';
+        continue;
+      }
       const p = Number.isFinite(t.probability) ? +t.probability : NaN;
       paintProb(el, p, this.probEnabled, this.probThreshold, this._probRGB, this._probBaseAlpha);
     }
@@ -179,35 +214,57 @@ export class OverlayRenderer {
     this.container.textContent = '';
 
     const frag = document.createDocumentFragment();
+    const toks = this.tokens || [];
+    const abs = this.absIndex || [];
 
-    for (let ti = 0; ti < this.tokens.length; ti++) {
-      const t = this.tokens[ti];
+    // Build full text once to slice pre/post quickly
+    let fullText = '';
+    for (let i = 0; i < toks.length; i++) {
+      const t = toks[i];
       if (!t || t.state === 'del') continue;
+      fullText += (t.word || '');
+    }
 
+    const total = toks.length;
+    const start = Math.max(0, Math.min(this.windowStart, Math.max(0, total - 1)));
+    const end = Math.min(total, start + this.windowSize);
+    const startChar = abs[start] || 0;
+    let endChar;
+    if (end >= total) {
+      endChar = fullText.length;
+    } else {
+      const tEnd = toks[end];
+      // end char is before token[end], so up to its start
+      endChar = abs[end] || fullText.length;
+      if (!Number.isFinite(endChar)) endChar = fullText.length;
+    }
+
+    // Pre-text (non-window) as a single text node
+    if (startChar > 0) frag.appendChild(document.createTextNode(fullText.slice(0, startChar)));
+
+    // Window spans
+    for (let ti = start; ti < end; ti++) {
+      const t = toks[ti];
+      if (!t || t.state === 'del') continue;
       if (t.word === '\n') {
-        // keep layout identical to wordsToText join
         frag.appendChild(document.createTextNode('\n'));
         continue;
       }
-
       const sp = document.createElement('span');
       sp.className = 'word';
       sp.textContent = t.word;
       if (Number.isFinite(t.start)) sp.dataset.start = String(t.start);
       if (Number.isFinite(t.end)) sp.dataset.end = String(t.end);
       sp.dataset.ti = String(ti);
-      if (Number.isFinite(t.probability)) {
-        // store a compact prob (2 decimals) – good for debugging, not used by painter
-        sp.dataset.prob = String(Math.round(t.probability * 100) / 100);
-      }
-
-      // probability tint (if enabled and below threshold)
+      if (Number.isFinite(t.probability)) sp.dataset.prob = String(Math.round(t.probability * 100) / 100);
       const p = Number.isFinite(t.probability) ? +t.probability : NaN;
       paintProb(sp, p, this.probEnabled, this.probThreshold, this._probRGB, this._probBaseAlpha);
-
       frag.appendChild(sp);
       this._spanByIndex.set(ti, sp);
     }
+
+    // Post-text (non-window)
+    if (endChar < fullText.length) frag.appendChild(document.createTextNode(fullText.slice(endChar)));
 
     this.container.appendChild(frag);
 

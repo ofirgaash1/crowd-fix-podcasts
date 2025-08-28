@@ -25,12 +25,26 @@ async function loadAllCorrections() {
   if (!supa) return;
   
   try {
-    const { data, error } = await supa.from('corrections').select('file_path');
-    if (error) throw error;
-    correctionsCache = new Set((data || []).map(r => r.file_path));
-    console.log('✅ Corrections loaded:', correctionsCache.size);
+    const [corr, ver] = await Promise.all([
+      supa.from('corrections').select('file_path'),
+      // PostgREST null filter syntax
+      supa.from('transcripts').select('file_path').not('version', 'is', null)
+    ]);
+    if (corr.error && corr.status !== 406) {
+      console.error('Corrections query failed:', { status: corr.status, error: corr.error });
+      throw corr.error;
+    }
+    if (ver.error && ver.status !== 406) {
+      console.error('Transcripts query failed:', { status: ver.status, error: ver.error });
+      throw ver.error;
+    }
+    const set = new Set();
+    (corr.data || []).forEach(r => set.add(r.file_path));
+    (ver.data || []).forEach(r => set.add(r.file_path));
+    correctionsCache = set;
+    console.log('✅ Corrections loaded (union corrections+transcripts):', correctionsCache.size);
   } catch (e) {
-    console.error('❌ Failed to load corrections:', e.message || e);
+    console.error('❌ Failed to load corrections (union):', e?.message || e);
   }
 }
 
@@ -39,6 +53,25 @@ async function loadAllCorrections() {
  */
 export function hasCorrection(filePath) {
   return correctionsCache.has(filePath);
+}
+
+// ---- Local fallback cache for corrections (per-file) ----
+const LS_PREFIX = 'corr:';
+function getLocalCorrection(filePath) {
+  try {
+    const raw = localStorage.getItem(LS_PREFIX + filePath);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch { return null; }
+}
+function setLocalCorrection(filePath, jsonObj) {
+  try { localStorage.setItem(LS_PREFIX + filePath, JSON.stringify(jsonObj)); } catch {}
+}
+
+/** Manually mark a correction in the local cache (e.g., after save) */
+export function markCorrection(filePath) {
+  if (!filePath) return;
+  try { correctionsCache.add(filePath); } catch {}
 }
 
 // ---- HF auth token helpers (read from localStorage like v1) ----
@@ -62,6 +95,19 @@ function normPaths(folder, file) {
   const audioPath = `${folder}/${file}`;
   const trPath = `${folder}/${file.replace(/\.opus$/i, '')}/full_transcript.json.gz`;
   return { audioPath, trPath };
+}
+
+// ---- Crypto helpers (SHA-256 hex) ----
+export async function sha256Hex(text) {
+  try {
+    const enc = new TextEncoder();
+    const buf = await crypto.subtle.digest('SHA-256', enc.encode(String(text || '')));
+    const bytes = new Uint8Array(buf);
+    return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+  } catch (e) {
+    console.warn('sha256 failed:', e);
+    return '';
+  }
 }
 
 // ---- Folder/File listing helpers ----
@@ -277,6 +323,10 @@ function wordsToText(tokens) {
 
 // ---- Supabase: corrections (optional) -----------------------------
 async function loadCorrectionFromDB(filePath) {
+  // Prefer local cache first (fast UX + offline)
+  const local = getLocalCorrection(filePath);
+  if (local) return local;
+
   if (!supa) return null;
   const { data, error } = await supa
     .from('corrections')
@@ -289,7 +339,9 @@ async function loadCorrectionFromDB(filePath) {
     console.warn('Supabase corrections fetch failed:', error);
     return null;
   }
-  return data?.json_data || null;
+  const json = data?.json_data || null;
+  if (json) setLocalCorrection(filePath, json);
+  return json;
 }
 
 /** Upsert correction JSON */
@@ -302,7 +354,178 @@ export async function saveCorrectionToDB(filePath, jsonObj) {
     .single();
 
   if (error) throw error;
+  // Also persist locally for instant reloads/offline
+  setLocalCorrection(filePath, jsonObj);
   return data;
+}
+
+// ---- Versioned transcripts (optional, if table exists) ------------
+export async function getLatestTranscript(filePath) {
+  if (!supa) return null;
+  try {
+    const { data, error } = await supa
+      .from('transcripts')
+      .select('version, base_sha256, text, words')
+      .eq('file_path', filePath)
+      .order('version', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) throw error;
+    return data || null;
+  } catch (e) {
+    console.warn('getLatestTranscript failed:', e.message || e);
+    return null;
+  }
+}
+
+/** Fetch a specific transcript version (text + words) */
+export async function getTranscriptVersion(filePath, version) {
+  if (!supa) return null;
+  if (!filePath || !Number.isFinite(+version)) return null;
+  try {
+    const { data, error } = await supa
+      .from('transcripts')
+      .select('version, base_sha256, text, words')
+      .eq('file_path', filePath)
+      .eq('version', +version)
+      .maybeSingle();
+    if (error) throw error;
+    return data || null;
+  } catch (e) {
+    console.warn('getTranscriptVersion failed:', e.message || e);
+    return null;
+  }
+}
+
+export async function saveTranscriptVersion(filePath, { parentVersion = null, text, words }) {
+  if (!supa) throw new Error('Supabase client not configured');
+  const base_sha256 = await sha256Hex(text || '');
+  let version = 1;
+  try {
+    if (parentVersion == null) {
+      const latest = await getLatestTranscript(filePath);
+      version = latest ? (latest.version + 1) : 1;
+    } else {
+      version = Math.max(1, (+parentVersion || 0) + 1);
+    }
+    const row = { file_path: filePath, version, base_sha256, text: String(text||''), words: Array.isArray(words)? words: [] };
+    const { data, error } = await supa
+      .from('transcripts')
+      .insert(row)
+      .select('version, base_sha256')
+      .single();
+    if (error) throw error;
+    return data;
+  } catch (e) {
+    console.error('saveTranscriptVersion failed:', e.message || e);
+    throw e;
+  }
+}
+
+/** Fetch transcript edits (diff layers) for a file */
+export async function getTranscriptEdits(filePath) {
+  if (!supa) return [];
+  try {
+    const { data, error } = await supa
+      .from('transcript_edits')
+      .select('parent_version, child_version, dmp_patch, token_ops')
+      .eq('file_path', filePath)
+      .order('child_version', { ascending: true });
+    if (error) throw error;
+    return Array.isArray(data) ? data : [];
+  } catch (e) {
+    console.warn('getTranscriptEdits failed:', e?.message || e);
+    return [];
+  }
+}
+
+/** Fetch all transcript versions (for fallback diff layers) */
+export async function getAllTranscripts(filePath) {
+  if (!supa) return [];
+  try {
+    const { data, error } = await supa
+      .from('transcripts')
+      .select('version, text')
+      .eq('file_path', filePath)
+      .order('version', { ascending: true });
+    if (error) throw error;
+    return Array.isArray(data) ? data : [];
+  } catch (e) {
+    console.warn('getAllTranscripts failed:', e?.message || e);
+    return [];
+  }
+}
+// ---- Edits history (optional) -------------------------------------
+export async function saveTranscriptEdit(filePath, parentVersion, childVersion, dmp_patch, token_ops) {
+  if (!supa) return null;
+  try {
+    const payload = {
+      file_path: filePath,
+      parent_version: +parentVersion || 0,
+      child_version: +childVersion || 0,
+      dmp_patch: String(dmp_patch || ''),
+      token_ops: token_ops != null ? token_ops : null
+    };
+    const { data, error } = await supa
+      .from('transcript_edits')
+      .insert(payload)
+      .select('id')
+      .single();
+    if (error) throw error;
+    return data;
+  } catch (e) {
+    console.warn('saveTranscriptEdit failed (optional):', e.message || e);
+    return null;
+  }
+}
+
+// ---- Confirmations (anchored to version + hash) --------------------
+export async function getConfirmations(filePath, version) {
+  if (!supa || !filePath || !Number.isFinite(+version)) return [];
+  try {
+    const { data, error } = await supa
+      .from('transcript_confirmations')
+      .select('id, start_offset, end_offset, prefix, exact, suffix')
+      .eq('file_path', filePath)
+      .eq('version', +version)
+      .order('start_offset', { ascending: true });
+    if (error) throw error;
+    return (data || []).map(r => ({ id: r.id, range: [r.start_offset, r.end_offset], prefix: r.prefix, exact: r.exact, suffix: r.suffix }));
+  } catch (e) {
+    console.warn('getConfirmations failed:', e.message || e);
+    return [];
+  }
+}
+
+export async function saveConfirmations(filePath, version, base_sha256, ranges, fullText) {
+  if (!supa) throw new Error('Supabase client not configured');
+  if (!filePath || !Number.isFinite(+version)) throw new Error('invalid version');
+  const text = String(fullText || '');
+  const mkCtx = (s, e) => {
+    const preStart = Math.max(0, s - 16);
+    const sufEnd = Math.max(e, Math.min(text.length, e + 16));
+    return {
+      start_offset: s,
+      end_offset: e,
+      prefix: text.slice(preStart, s),
+      exact: text.slice(s, e),
+      suffix: text.slice(e, sufEnd)
+    };
+  };
+  const rows = (ranges || []).map(r => mkCtx(r[0], r[1]));
+  try {
+    // Strategy: clear and re-insert for simplicity
+    await supa.from('transcript_confirmations').delete().eq('file_path', filePath).eq('version', +version);
+    if (rows.length) {
+      const payload = rows.map(x => ({ file_path: filePath, version: +version, base_sha256: base_sha256 || '', ...x }));
+      const { error } = await supa.from('transcript_confirmations').insert(payload);
+      if (error) throw error;
+    }
+    return { count: rows.length };
+  } catch (e) {
+    console.error('saveConfirmations failed:', e.message || e);
+    throw e;
+  }
 }
 
 // ---- Public: load one episode (baseline + initial tokens + audio) ----
@@ -325,12 +548,22 @@ export async function loadEpisode({ folder, file }) {
   if (!folder || !file) throw new Error('loadEpisode: folder and file are required');
   const { audioPath, trPath } = normPaths(folder, file);
 
-  // 1) Try Supabase corrections first (optional)
-  let correction = null;
+  // 1) Try latest versioned transcript first (if available)
+  let latestVersion = null;
   try {
-    correction = await loadCorrectionFromDB(audioPath);
+    latestVersion = await getLatestTranscript(audioPath);
   } catch (e) {
-    console.warn('Corrections lookup error:', e);
+    console.warn('Latest transcript lookup error:', e);
+  }
+
+  // 1b) If no versioned transcript, try old-style correction JSON
+  let correction = null;
+  if (!latestVersion) {
+    try {
+      correction = await loadCorrectionFromDB(audioPath);
+    } catch (e) {
+      console.warn('Corrections lookup error:', e);
+    }
   }
 
   // 2) Always fetch HF baseline transcript (for diff/align baseline)
@@ -348,9 +581,14 @@ export async function loadEpisode({ folder, file }) {
   const baselineTokens = flattenToTokens(hfNorm);
   const baselineText = wordsToText(baselineTokens);
 
-  // 3) Choose initial tokens (DB correction if present, else HF baseline)
-  let initialTokens, usedCorrection = false;
-  if (correction) {
+  // 3) Choose initial tokens (latest transcript > correction > baseline)
+  let initialTokens, usedCorrection = false, version = null, base_sha256 = '';
+  if (latestVersion && Array.isArray(latestVersion.words)) {
+    initialTokens = latestVersion.words;
+    version = latestVersion.version;
+    base_sha256 = latestVersion.base_sha256 || '';
+    usedCorrection = true;
+  } else if (correction) {
     const corrNorm = normalizeTranscript(correction);
     initialTokens = flattenToTokens(corrNorm);
     usedCorrection = true;
@@ -383,7 +621,9 @@ export async function loadEpisode({ folder, file }) {
     baselineTokens,
     baselineText,
     initialTokens,
-    usedCorrection
+    usedCorrection,
+    version,
+    base_sha256
   };
 }
 
@@ -391,9 +631,18 @@ export async function loadEpisode({ folder, file }) {
 export const api = {
   configureSupabase,
   loadEpisode,
+  getLatestTranscript,
+  getTranscriptVersion,
+  saveTranscriptVersion,
+  getTranscriptEdits,
+  getAllTranscripts,
+  saveTranscriptEdit,
+  getConfirmations,
+  saveConfirmations,
   saveCorrectionToDB,
   listFolders,
   listFiles,
-  hasCorrection
+  hasCorrection,
+  sha256Hex
 };
 export default api;
