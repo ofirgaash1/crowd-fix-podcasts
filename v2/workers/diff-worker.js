@@ -66,6 +66,35 @@ function charDiffStrings(aStr, bStr, dbgTag) {
   return normalizeDiffs(diffs);
 }
 
+async function dmpDiffStrings(aStr, bStr, dbgTag) {
+  try {
+    const { diff_match_patch, DIFF_DELETE, DIFF_INSERT, DIFF_EQUAL } = await import('https://esm.sh/diff-match-patch@1.0.5');
+    const dmp = new diff_match_patch();
+    // Tune a little for responsiveness
+    dmp.Diff_Timeout = 1.0;
+    dmp.Diff_EditCost = 4;
+    let diffs = dmp.diff_main(String(aStr||''), String(bStr||''));
+    try { dmp.diff_cleanupSemantic(diffs); } catch {}
+    const mapped = [];
+    for (const [op, s] of diffs) {
+      if (!s) continue;
+      const code = (op === DIFF_INSERT) ? 1 : (op === DIFF_DELETE ? -1 : 0);
+      if (mapped.length && mapped[mapped.length-1][0] === code) mapped[mapped.length-1][1] += s; else mapped.push([code, s]);
+    }
+    if (dbgTag) {
+      try {
+        const vis = (t) => String(t).replace(/\n/g,'⏎').replace(/ /g,'␠');
+        const sample = mapped.slice(0,8).map(([op,s]) => [op, vis(String(s).slice(0,80))]);
+        console.log(`[diff:${dbgTag}] dmp.sample`, JSON.stringify(sample));
+      } catch {}
+    }
+    return mapped;
+  } catch (e) {
+    if (dbgTag) { try { console.warn(`[diff:${dbgTag}] dmp import failed`, e); } catch {} }
+    return null;
+  }
+}
+
 function tokenDiffStrings(aStr, bStr, dbgTag) {
   const aTokAll = toTokens(aStr);
   const bTokAll = toTokens(bStr);
@@ -447,6 +476,19 @@ self.onmessage = (ev) => {
             diffs = diffs2;
             okNew = okOld = true;
             strategy = 'fallback:char-trim';
+          }
+        } catch {}
+      }
+      if (!(okNew && okOld)) {
+        // Fallback 1b: try diff-match-patch (semantic cleanup)
+        try {
+          const dmpDiffs = await dmpDiffStrings(baseText, nextText, debugTag);
+          if (Array.isArray(dmpDiffs) && dmpDiffs.length) {
+            const rn = (ops) => ops.map(([op,s]) => (op === -1 ? '' : s)).join('');
+            const ro = (ops) => ops.map(([op,s]) => (op === 1 ? '' : s)).join('');
+            if (rn(dmpDiffs) === nextText && ro(dmpDiffs) === baseText) {
+              diffs = dmpDiffs; okNew = okOld = true; strategy = 'fallback:dmp';
+            }
           }
         } catch {}
       }
