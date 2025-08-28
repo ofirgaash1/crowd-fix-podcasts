@@ -3,7 +3,6 @@
 
 import { store, getState, makeThrottle } from './core/state.js';
 import { ScrollVirtualizer } from './render/virtualizer.js';
-import { renderDiffHTML } from './render/diff-panel.js';
 import { setupPlayerSync } from './player/sync.js';
 import { setupBrowser } from './data/browser.js';
 import { setupSupabase } from './data/supabase-init.js';
@@ -14,7 +13,6 @@ import { setupSettingsModal } from './ui/settings-modal.js';
 import { setupThemeToggle } from './ui/theme.js';
 import { setupUIControls } from './ui/controls.js';
 import { setupHud } from './ui/hud.js';
-import { showToast } from './ui/toast.js';
 import { setupEditorPipeline as setupEditorPipelineMod, setShowingLayers as setLayersFlag, getTypingQuietUntil, setTypingQuiet as setTypingQuiet } from './editor/pipeline.js';
 import { initWorkers } from './workers/init.js';
 
@@ -197,6 +195,34 @@ setupScrollSync(els);
 
 // Karaoke follow (highlight + gentle auto-scroll)
 setupKaraokeFollow(els, virtualizer);
+
+/* transcript interactions */
+// Alt+click a word to seek/play from its start (keeps normal click for editing)
+if (els.transcript && els.player) {
+  els.transcript.addEventListener('click', (e) => {
+    if (!e.altKey) return;
+    const el = e.target && e.target.closest ? e.target.closest('.word') : null;
+    if (!el) return;
+    const t = +el.dataset.start;
+    if (Number.isFinite(t)) {
+      try { els.player.currentTime = Math.max(0, t + 0.01); } catch {}
+      try { els.player.play(); } catch {}
+      e.preventDefault();
+    }
+  });
+
+  // Right-click a word to seek/play and suppress the context menu
+  els.transcript.addEventListener('contextmenu', (e) => {
+    const el = e.target && e.target.closest ? e.target.closest('.word') : null;
+    if (!el) return;
+    const t = +el.dataset.start;
+    if (Number.isFinite(t)) {
+      try { els.player.currentTime = Math.max(0, t + 0.01); } catch {}
+      try { els.player.play(); } catch {}
+      e.preventDefault();
+    }
+  });
+}
 
 // Diff layers (show all dmp_patch rows)
 setupShowLayers(els, workers);
