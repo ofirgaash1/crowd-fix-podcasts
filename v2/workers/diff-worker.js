@@ -83,9 +83,42 @@ function granularDiff(baseText, nextText, dbgTag) {
   if (aMid.length || bMid.length) {
     const lineDiffs = myersDiffSeq(aMid, bMid, (arr) => arr.join(''));
     const delBuf = [];
+    const insBuf = [];
+    if (dbgTag) {
+      try {
+        const vis = (s) => String(s).replace(/\n/g, '⏎').replace(/ /g, '␠');
+        const sampleOps = lineDiffs.slice(0, 10).map(([op, s]) => [op, vis(String(s).slice(0, 80))]);
+        console.log(`[diff:${dbgTag}] lineDiffs.sample`, sampleOps);
+      } catch {}
+    }
     for (const [op, chunk] of lineDiffs) {
-      if (op === 0) { while (delBuf.length) { out.push([-1, delBuf.shift()]); } out.push([0, chunk]); continue; }
-      if (op === -1) { delBuf.push(chunk); continue; }
+      if (op === 0) {
+        while (delBuf.length) { out.push([-1, delBuf.shift()]); }
+        while (insBuf.length) { out.push([1, insBuf.shift()]); }
+        out.push([0, chunk]);
+        continue;
+      }
+      if (op === -1) {
+        // If there is an unmatched insertion waiting, refine pair (ins first)
+        if (insBuf.length) {
+          const newChunk = insBuf.shift();
+          if (dbgTag) {
+            try {
+              const vis = (s) => String(s).replace(/\n/g, '⏎').replace(/ /g, '␠');
+              console.log(`[diff:${dbgTag}] refine-lines (ins-first) old.len`, chunk.length, 'new.len', newChunk.length);
+              console.log(`[diff:${dbgTag}] old.preview`, vis(chunk.slice(0, 120)));
+              console.log(`[diff:${dbgTag}] new.preview`, vis(newChunk.slice(0, 120)));
+            } catch {}
+          }
+          const refined = tokenDiffStrings(chunk, newChunk, dbgTag);
+          for (const d of refined) {
+            const L = out.length; if (L && out[L-1][0] === d[0]) out[L-1][1] += d[1]; else out.push([d[0], d[1]]);
+          }
+        } else {
+          delBuf.push(chunk);
+        }
+        continue;
+      }
       // op === 1
       if (delBuf.length) {
         const oldChunk = delBuf.shift();
@@ -101,15 +134,24 @@ function granularDiff(baseText, nextText, dbgTag) {
         for (const d of refined) {
           const L = out.length; if (L && out[L-1][0] === d[0]) out[L-1][1] += d[1]; else out.push([d[0], d[1]]);
         }
-        while (delBuf.length) { out.push([-1, delBuf.shift()]); }
       } else {
-        out.push([1, chunk]);
+        insBuf.push(chunk);
       }
     }
+    // Flush any remaining unmatched runs
     while (delBuf.length) { out.push([-1, delBuf.shift()]); }
+    while (insBuf.length) { out.push([1, insBuf.shift()]); }
   }
 
   if (post) out.push([0, aLines.slice(aLines.length - post).join('')]);
+  if (dbgTag) {
+    try {
+      const vis = (s) => String(s).replace(/\n/g, '⏎').replace(/ /g, '␠');
+      const sample = out.slice(0, 12).map(([op,s]) => [op, vis(String(s).slice(0, 80))]);
+      const stats = computeStats(out);
+      console.log(`[diff:${dbgTag}] granular.out sample`, sample, 'stats', stats);
+    } catch {}
+  }
   return out;
 }
 
