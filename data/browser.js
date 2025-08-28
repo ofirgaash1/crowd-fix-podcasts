@@ -3,7 +3,7 @@
 
 import { store } from '../core/state.js';
 import { showToast } from '../ui/toast.js';
-import { listFolders, listFiles, loadEpisode, hasCorrection, getConfirmations } from './api.js';
+import { listFolders, listFiles, loadEpisode, hasCorrection, getConfirmations } from '../data/api.js';
 
 export function setupBrowser(els, { bumpEditGen } = {}) {
   if (!els?.folders || !els?.files) return;

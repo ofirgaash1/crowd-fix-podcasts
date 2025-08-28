@@ -19,7 +19,7 @@ export function setupSettingsModal(els) {
   function updateSettingsButtonText() {
     try {
       const tok = loadCurrentToken();
-      els.settingsBtn.textContent = tok ? '⚙️ יש לנו את זה' : '⚙️ צדיק, הזנת טוקן?';
+      els.settingsBtn.textContent = tok ? '⚙️ הגדרות (✓)' : '⚙️ הגדרות';
     } catch {}
   }
   function openModal() {
