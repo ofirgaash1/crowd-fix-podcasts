@@ -6,13 +6,14 @@ import { OverlayRenderer, computeAbsIndexMap } from './overlay.js';
 
 export class ScrollVirtualizer {
   /**
-   * @param {{ container: HTMLElement, renderer?: OverlayRenderer }} opts
+   * @param {{ container: HTMLElement, scrollEl?: HTMLElement, renderer?: OverlayRenderer }} opts
    */
   constructor(opts = {}) {
-    const { container, renderer } = opts;
+    const { container, scrollEl, renderer } = opts;
     if (!container) throw new Error('ScrollVirtualizer: container is required');
 
     this.container = container;
+    this.scrollEl = scrollEl || container;
     this.renderer = renderer || new OverlayRenderer({ container, windowSize: 800 });
 
     // cached inputs
@@ -22,7 +23,7 @@ export class ScrollVirtualizer {
     // windowing helpers
     this.windowSize = 800;
     this._onScroll = this._onScroll?.bind ? this._onScroll.bind(this) : () => {};
-    container.addEventListener('scroll', () => this._onScroll(), { passive: true });
+    this.scrollEl.addEventListener('scroll', () => this._onScroll(), { passive: true });
   }
 
   /** Replace tokens and repaint everything */
@@ -75,7 +76,7 @@ export class ScrollVirtualizer {
     const totalTokens = (this.tokens || []).length;
     if (!totalTokens) return;
     const maxStart = Math.max(0, totalTokens - this.windowSize);
-    const el = this.container;
+    const el = this.scrollEl || this.container;
     const sh = el.scrollHeight - el.clientHeight;
     const ratio = sh > 0 ? Math.max(0, Math.min(1, el.scrollTop / sh)) : 0;
     const start = Math.floor(ratio * maxStart);
@@ -86,6 +87,7 @@ export class ScrollVirtualizer {
   /** Cleanup hook (kept minimal; OverlayRenderer owns the DOM) */
   destroy() {
     this.container = null;
+    this.scrollEl = null;
     this.tokens = [];
     this.absIndex = [];
   }
