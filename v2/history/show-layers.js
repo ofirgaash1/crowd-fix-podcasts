@@ -75,9 +75,29 @@ export function setupShowLayers(els, workers) {
       };
       const devHtml = `<div class="layer"><div class="hint">— DEV LOG (temporary)</div><pre>${escapeHtml(JSON.stringify(devLog, null, 2))}</pre></div>`;
 
-      const html = await buildLayersHTML(filePath, versions, async (a, b) => {
-        // Compare the explicit pair atomically (no separate baseline mutations)
-        const { diffs } = await workers.diff.send(a, b, { timeoutSec: 0.8, editCost: 8 });
+      const html = await buildLayersHTML(filePath, versions, async (a, b, meta) => {
+        const parentV = meta?.parentV ?? '?';
+        const childV = meta?.childV ?? '?';
+        const tag = `layers:v${parentV}->v${childV}`;
+        try {
+          console.groupCollapsed(`[layers] ${filePath} v${parentV} -> v${childV}`);
+          const vis = (s) => String(s).replace(/\n/g, '⏎').replace(/ /g, '␠');
+          console.log('a.len', (meta?.aFull||'').length, 'b.len', (meta?.bFull||'').length);
+          console.log('a.preview', vis((meta?.aFull||'').slice(0, 120)));
+          console.log('b.preview', vis((meta?.bFull||'').slice(0, 120)));
+        } catch {}
+        const { diffs } = await workers.diff.send(a, b, { timeoutSec: 0.8, editCost: 8, debugTag: tag });
+        try {
+          const ops = Array.isArray(diffs) ? diffs : [];
+          const inserted = ops.filter(x=>x[0]===1).map(x=>x[1]).join('');
+          const deleted  = ops.filter(x=>x[0]===-1).map(x=>x[1]).join('');
+          const eq_len = ops.filter(x=>x[0]===0).reduce((n,x)=>n+String(x[1]||'').length,0);
+          const vis = (s) => String(s).replace(/\n/g, '⏎').replace(/ /g, '␠');
+          console.log('insert.len', inserted.length, 'delete.len', deleted.length, 'equal.len', eq_len, 'ops', ops.length);
+          console.log('insert.preview', vis(inserted.slice(0, 120)));
+          console.log('delete.preview', vis(deleted.slice(0, 120)));
+          console.groupEnd?.();
+        } catch {}
         return diffs;
       });
 
