@@ -88,10 +88,17 @@ function granularDiff(baseText, nextText, dbgTag) {
       try {
         const vis = (s) => String(s).replace(/\n/g, '⏎').replace(/ /g, '␠');
         const sampleOps = lineDiffs.slice(0, 10).map(([op, s]) => [op, vis(String(s).slice(0, 80))]);
-        console.log(`[diff:${dbgTag}] lineDiffs.sample`, sampleOps);
+        const cDel = lineDiffs.filter(x=>x[0]===-1).length;
+        const cIns = lineDiffs.filter(x=>x[0]===1).length;
+        const cEq  = lineDiffs.filter(x=>x[0]===0).length;
+        console.log(`[diff:${dbgTag}] lineDiffs.counts del`, cDel, 'ins', cIns, 'eq', cEq);
+        console.log(`[diff:${dbgTag}] lineDiffs.sample`, JSON.stringify(sampleOps));
       } catch {}
     }
     for (const [op, chunk] of lineDiffs) {
+      if (dbgTag) {
+        try { console.log(`[diff:${dbgTag}] lineOp`, op, 'len', String(chunk||'').length); } catch {}
+      }
       if (op === 0) {
         while (delBuf.length) { out.push([-1, delBuf.shift()]); }
         while (insBuf.length) { out.push([1, insBuf.shift()]); }
@@ -101,6 +108,7 @@ function granularDiff(baseText, nextText, dbgTag) {
       if (op === -1) {
         // If there is an unmatched insertion waiting, refine pair (ins first)
         if (insBuf.length) {
+          if (dbgTag) { try { console.log(`[diff:${dbgTag}] refining (ins-first)`); } catch {} }
           const newChunk = insBuf.shift();
           if (dbgTag) {
             try {
@@ -121,6 +129,7 @@ function granularDiff(baseText, nextText, dbgTag) {
       }
       // op === 1
       if (delBuf.length) {
+        if (dbgTag) { try { console.log(`[diff:${dbgTag}] refining (del-first)`); } catch {} }
         const oldChunk = delBuf.shift();
         if (dbgTag) {
           try {
@@ -149,7 +158,7 @@ function granularDiff(baseText, nextText, dbgTag) {
       const vis = (s) => String(s).replace(/\n/g, '⏎').replace(/ /g, '␠');
       const sample = out.slice(0, 12).map(([op,s]) => [op, vis(String(s).slice(0, 80))]);
       const stats = computeStats(out);
-      console.log(`[diff:${dbgTag}] granular.out sample`, sample, 'stats', stats);
+      console.log(`[diff:${dbgTag}] granular.out sample`, JSON.stringify(sample), 'stats', stats);
     } catch {}
   }
   return out;
