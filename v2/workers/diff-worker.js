@@ -231,12 +231,30 @@ self.onmessage = (ev) => {
       // Options kept for future use
       const timeout = Number(msg?.options?.timeoutSec);
       const editCost = Number(msg?.options?.editCost);
+      const debugTag = msg?.options?.debugTag ? String(msg.options.debugTag) : '';
       void timeout; void editCost;
 
       // Prefer granular (line+token) diffs for readability
+      if (debugTag) console.groupCollapsed(`[diff:${debugTag}] start`);
+      if (debugTag) {
+        const vis = (s) => String(s).replace(/\n/g, '⏎').replace(/ /g, '␠');
+        console.log('baseline.len', baseText.length, 'next.len', nextText.length);
+        console.log('baseline.preview', vis(baseText.slice(0,120)));
+        console.log('next.preview', vis(nextText.slice(0,120)));
+        const aLines0 = splitLinesKeepNL(baseText);
+        const bLines0 = splitLinesKeepNL(nextText);
+        const preL = commonPrefixLen(aLines0, bLines0);
+        const aTail0 = aLines0.slice(preL);
+        const bTail0 = bLines0.slice(preL);
+        const postL = commonSuffixLen(aTail0, bTail0);
+        console.log('lines.pre', preL, 'lines.post', postL, 'a.mid.lines', aLines0.length - preL - postL, 'b.mid.lines', bLines0.length - preL - postL);
+      }
+
       let diffs = granularDiff(baseText, nextText);
+      let strategy = 'granular';
       // If something goes wrong (unlikely), fall back to previous strategies
       if (!Array.isArray(diffs) || diffs.length === 0) {
+        strategy = 'fallback:token/char';
         const aTokAll = toTokens(baseText);
         const bTokAll = toTokens(nextText);
         const preTok = commonPrefixLen(aTokAll, bTokAll);
@@ -297,14 +315,24 @@ self.onmessage = (ev) => {
           if (canon(reconstructNew(diffs2)) === canon(nextText) && canon(reconstructOld(diffs2)) === canon(baseText)) {
             diffs = diffs2;
             okNew = okOld = true;
+            strategy = 'fallback:char-trim';
           }
         } catch {}
       }
       if (!(okNew && okOld)) {
         // Fallback 2: minimal but always-correct patch: delete all A, insert all B
+        strategy = 'fallback:delete-insert-all';
         diffs = [];
         if (baseText) diffs.push([-1, baseText]);
         if (nextText) diffs.push([1, nextText]);
+      }
+      if (debugTag) {
+        const statsDbg = computeStats(diffs);
+        const vis = (s) => String(s).replace(/\n/g, '⏎').replace(/ /g, '␠');
+        const sample = diffs.slice(0, 8).map(([op,s]) => [op, vis(String(s).slice(0, 48))]);
+        console.log('strategy', strategy, 'stats', statsDbg, 'ops', diffs.length);
+        console.log('ops.sample', sample);
+        console.groupEnd?.();
       }
       const patchText = patch_toText_fromDiffs(diffs);
 
