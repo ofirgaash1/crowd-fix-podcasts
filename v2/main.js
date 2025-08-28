@@ -94,7 +94,11 @@ let showingLayers = false;
 const workers = initWorkers();
 
 // Virtualized transcript view subscribes to store and paints tokens.
-const virtualizer = new ScrollVirtualizer({ container: els.transcript });
+const virtualizer = new ScrollVirtualizer({
+  container: els.transcript,
+  // Scroll actually occurs on the card body wrapper
+  scrollEl: els.transcriptCard ? els.transcriptCard.querySelector('.body') : els.transcript
+});
 // Initialize renderer settings from store
 try {
   const s0 = getState();
