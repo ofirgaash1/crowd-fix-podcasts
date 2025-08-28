@@ -40,6 +40,32 @@ function splitLinesKeepNL(s) {
 }
 
 // Token-level diff for a single line-sized string
+function normalizeDiffs(diffs) {
+  const out = [];
+  for (const d of (diffs || [])) {
+    const op = Array.isArray(d) ? d[0] : 0; const s = Array.isArray(d) ? String(d[1] || '') : '';
+    if (!s) continue;
+    if (out.length && out[out.length-1][0] === op) { out[out.length-1][1] += s; }
+    else out.push([op, s]);
+  }
+  return out;
+}
+
+function charDiffStrings(aStr, bStr, dbgTag) {
+  const aChars = toChars(aStr);
+  const bChars = toChars(bStr);
+  const pre = commonPrefixLen(aChars, bChars);
+  const aMid = aChars.slice(pre);
+  const bMid = bChars.slice(pre);
+  const post = commonSuffixLen(aMid, bMid);
+  const aC = aChars.slice(pre, aChars.length - post);
+  const bC = bChars.slice(pre, bChars.length - post);
+  let diffs = myersDiffSeq(aC, bC, (arr) => arr.join(''));
+  if (pre) diffs.unshift([0, aChars.slice(0, pre).join('')]);
+  if (post) diffs.push([0, aChars.slice(aChars.length - post).join('')]);
+  return normalizeDiffs(diffs);
+}
+
 function tokenDiffStrings(aStr, bStr, dbgTag) {
   const aTokAll = toTokens(aStr);
   const bTokAll = toTokens(bStr);
@@ -61,6 +87,16 @@ function tokenDiffStrings(aStr, bStr, dbgTag) {
   let diffs = myersDiffSeq(aTokMid, bTokMid, (arr) => arr.join(''));
   if (preTok) diffs.unshift([0, aTokAll.slice(0, preTok).join('')]);
   if (postTok) diffs.push([0, aTokAll.slice(aTokAll.length - postTok).join('')]);
+  diffs = normalizeDiffs(diffs);
+  // Validate per-line; if broken (e.g., duplicated tokens), fall back to char diff for this line
+  const reconNew = (ops) => ops.map(([op, s]) => op === -1 ? '' : s).join('');
+  const reconOld = (ops) => ops.map(([op, s]) => op === 1 ? '' : s).join('');
+  const okNew = reconNew(diffs) === String(bStr || '');
+  const okOld = reconOld(diffs) === String(aStr || '');
+  if (!okNew || !okOld) {
+    if (dbgTag) { try { console.warn(`[diff:${dbgTag}] token-diff failed validate (per-line), falling back to char-diff`); } catch {} }
+    diffs = charDiffStrings(aStr, bStr, dbgTag);
+  }
   return diffs;
 }
 
