@@ -6,7 +6,7 @@ import { canonicalizeText, lineTrim } from '../shared/canonical.js';
 /**
  * @param {string} filePath
  * @param {Array<{version:number,text:string}>} versions ordered ASC
- * @param {(a:string,b:string)=>Promise<Array<[number,string]>>} getDiff - async function to get diffs
+ * @param {(a:string,b:string, meta?:{parentV:number,childV:number,aFull:string,bFull:string,aMid:string,bMid:string})=>Promise<Array<[number,string]>>} getDiff - async function to get diffs
  * @returns {Promise<string>} HTML string
  */
 export async function buildLayersHTML(filePath, versions, getDiff) {
@@ -24,7 +24,7 @@ export async function buildLayersHTML(filePath, versions, getDiff) {
     const [aMid, bMid] = lineTrim(aFull, bFull);
     if (aMid === bMid) continue;
     let diffs = [];
-    try { diffs = await getDiff(aMid, bMid); } catch { diffs = []; }
+    try { diffs = await getDiff(aMid, bMid, { parentV, childV, aFull, bFull, aMid, bMid }); } catch { diffs = []; }
     const filtered = Array.isArray(diffs) ? diffs.filter(x => Array.isArray(x) && (x[0] === 1 || x[0] === -1)) : [];
     html += `<div class="layer"><div class="hint">— v${escapeHtml(parentV)} → v${escapeHtml(childV)}</div>`;
     const rowHtml = filtered.map(([op, text]) => {
@@ -35,4 +35,3 @@ export async function buildLayersHTML(filePath, versions, getDiff) {
   }
   return html;
 }
-
