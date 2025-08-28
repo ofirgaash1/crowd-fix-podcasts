@@ -2,6 +2,7 @@
 import { store, getState } from '../core/state.js';
 import { showToast } from './toast.js';
 import { canonicalizeText } from '../shared/canonical.js';
+import { verifyChainHash } from '../history/verify-chain.js';
 import { saveTranscriptVersion, saveTranscriptEdit, saveCorrectionToDB, markCorrection, getLatestTranscript, getTranscriptVersion, saveConfirmations, sha256Hex } from '../data/api.js';
 
 export function setupUIControls(els, { workers }, virtualizer, playerCtrl, isIdle) {
@@ -193,6 +194,32 @@ export function setupUIControls(els, { workers }, virtualizer, playerCtrl, isIdl
         console.debug('Edit history save skipped:', eHist?.message || eHist);
       }
       showToast('השינויים נשמרו בהצלחה', 'success');
+      // Verify version chain integrity (v1 + all ops → latest hash)
+      try {
+        const vRes = await verifyChainHash(filePath);
+        if (vRes && vRes.ok) {
+          const short = (vRes.expected || '').slice(0, 8);
+          showToast(`אימות גרסה הצליח (hash ${short})`, 'success');
+        } else if (vRes) {
+          if (vRes.reason === 'no-version') {
+            // nothing to verify (shouldn't happen right after save)
+          } else if (vRes.reason === 'missing-v1') {
+            showToast('אימות גרסה נכשל: v1 חסרה', 'error');
+          } else if (vRes.reason === 'bad-ops') {
+            showToast(`אימות גרסה נכשל: עדכון פגום ב-v${vRes.at}`, 'error');
+          } else if (vRes.reason === 'ops-dont-match-parent') {
+            showToast(`אימות גרסה נכשל: רצף עריכות לא עקבי ב-v${vRes.at}`, 'error');
+          } else if (vRes.reason === 'exception') {
+            showToast(`אימות גרסה נכשל: ${vRes.message || 'שגיאה'}`, 'error');
+          } else {
+            const got = (vRes.got || '').slice(0, 8);
+            const exp = (vRes.expected || '').slice(0, 8);
+            showToast(`אי-תאמה בגיבוב: ${got} ≠ ${exp}`, 'error');
+          }
+        }
+      } catch (e) {
+        console.warn('verifyChainHash failed:', e);
+      }
     } catch (e1) {
       console.warn('Versioned save failed, falling back to correction JSON:', e1);
       const segs = buildSegmentsFromTokens(tokens).map(s => ({ start: s.start, end: s.end, text: s.text, words: s.words })); const json = { text: segs.map(s=>s.text).join('\n'), segments: segs };
