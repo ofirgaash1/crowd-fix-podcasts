@@ -59,34 +59,37 @@ function tokenDiffStrings(aStr, bStr) {
 function granularDiff(baseText, nextText) {
   const aLines = splitLinesKeepNL(baseText);
   const bLines = splitLinesKeepNL(nextText);
-  const lineDiffs = myersDiffSeq(aLines, bLines, (arr) => arr.join(''));
+  const pre = commonPrefixLen(aLines, bLines);
+  const aTail = aLines.slice(pre);
+  const bTail = bLines.slice(pre);
+  const post = commonSuffixLen(aTail, bTail);
   const out = [];
-  const delBuf = [];
-  for (const [op, chunk] of lineDiffs) {
-    if (op === 0) {
-      // Flush any pending deletes
-      while (delBuf.length) { out.push([-1, delBuf.shift()]); }
-      out.push([0, chunk]);
-      continue;
-    }
-    if (op === -1) { delBuf.push(chunk); continue; }
-    // op === 1 -> insertion; pair it with a pending delete if present
-    if (delBuf.length) {
-      const oldLine = delBuf.shift();
-      const refined = tokenDiffStrings(oldLine, chunk);
-      // Coalesce adjacent same-op runs with previous out tail if needed
-      for (const d of refined) {
-        const L = out.length;
-        if (L && out[L-1][0] === d[0]) out[L-1][1] += d[1]; else out.push([d[0], d[1]]);
+  if (pre) out.push([0, aLines.slice(0, pre).join('')]);
+
+  const aMid = aLines.slice(pre, aLines.length - post);
+  const bMid = bLines.slice(pre, bLines.length - post);
+  if (aMid.length || bMid.length) {
+    const lineDiffs = myersDiffSeq(aMid, bMid, (arr) => arr.join(''));
+    const delBuf = [];
+    for (const [op, chunk] of lineDiffs) {
+      if (op === 0) { while (delBuf.length) { out.push([-1, delBuf.shift()]); } out.push([0, chunk]); continue; }
+      if (op === -1) { delBuf.push(chunk); continue; }
+      // op === 1
+      if (delBuf.length) {
+        const oldChunk = delBuf.shift();
+        const refined = tokenDiffStrings(oldChunk, chunk);
+        for (const d of refined) {
+          const L = out.length; if (L && out[L-1][0] === d[0]) out[L-1][1] += d[1]; else out.push([d[0], d[1]]);
+        }
+        while (delBuf.length) { out.push([-1, delBuf.shift()]); }
+      } else {
+        out.push([1, chunk]);
       }
-      // If more deletes remain (multiple lines deleted vs one inserted), flush them
-      while (delBuf.length) { out.push([-1, delBuf.shift()]); }
-    } else {
-      out.push([1, chunk]);
     }
+    while (delBuf.length) { out.push([-1, delBuf.shift()]); }
   }
-  // Flush trailing deletes
-  while (delBuf.length) { out.push([-1, delBuf.shift()]); }
+
+  if (post) out.push([0, aLines.slice(aLines.length - post).join('')]);
   return out;
 }
 
