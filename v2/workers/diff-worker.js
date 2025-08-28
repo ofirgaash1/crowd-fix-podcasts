@@ -40,7 +40,7 @@ function splitLinesKeepNL(s) {
 }
 
 // Token-level diff for a single line-sized string
-function tokenDiffStrings(aStr, bStr) {
+function tokenDiffStrings(aStr, bStr, dbgTag) {
   const aTokAll = toTokens(aStr);
   const bTokAll = toTokens(bStr);
   const preTok = commonPrefixLen(aTokAll, bTokAll);
@@ -49,6 +49,15 @@ function tokenDiffStrings(aStr, bStr) {
   const postTok = commonSuffixLen(aTokTail, bTokTail);
   const aTokMid = aTokAll.slice(preTok, aTokAll.length - postTok);
   const bTokMid = bTokAll.slice(preTok, bTokAll.length - postTok);
+  if (dbgTag) {
+    try {
+      const sample = (arr) => arr.slice(0, 12).map(t => JSON.stringify(t)).join(' | ');
+      console.log(`[diff:${dbgTag}] tokens.pre/post`, preTok, postTok, 'aTokAll', aTokAll.length, 'bTokAll', bTokAll.length);
+      console.log(`[diff:${dbgTag}] aTokMid.len`, aTokMid.length, 'bTokMid.len', bTokMid.length);
+      console.log(`[diff:${dbgTag}] aTokAll.sample`, sample(aTokAll));
+      console.log(`[diff:${dbgTag}] bTokAll.sample`, sample(bTokAll));
+    } catch {}
+  }
   let diffs = myersDiffSeq(aTokMid, bTokMid, (arr) => arr.join(''));
   if (preTok) diffs.unshift([0, aTokAll.slice(0, preTok).join('')]);
   if (postTok) diffs.push([0, aTokAll.slice(aTokAll.length - postTok).join('')]);
@@ -56,7 +65,7 @@ function tokenDiffStrings(aStr, bStr) {
 }
 
 // Granular diff: line-level pairing with token-level refinement inside changed lines
-function granularDiff(baseText, nextText) {
+function granularDiff(baseText, nextText, dbgTag) {
   const aLines = splitLinesKeepNL(baseText);
   const bLines = splitLinesKeepNL(nextText);
   const pre = commonPrefixLen(aLines, bLines);
@@ -64,6 +73,9 @@ function granularDiff(baseText, nextText) {
   const bTail = bLines.slice(pre);
   const post = commonSuffixLen(aTail, bTail);
   const out = [];
+  if (dbgTag) {
+    try { console.log(`[diff:${dbgTag}] line-anchors pre`, pre, 'post', post, 'aLines', aLines.length, 'bLines', bLines.length); } catch {}
+  }
   if (pre) out.push([0, aLines.slice(0, pre).join('')]);
 
   const aMid = aLines.slice(pre, aLines.length - post);
@@ -77,7 +89,15 @@ function granularDiff(baseText, nextText) {
       // op === 1
       if (delBuf.length) {
         const oldChunk = delBuf.shift();
-        const refined = tokenDiffStrings(oldChunk, chunk);
+        if (dbgTag) {
+          try {
+            const vis = (s) => String(s).replace(/\n/g, '⏎').replace(/ /g, '␠');
+            console.log(`[diff:${dbgTag}] refine-lines old.len`, oldChunk.length, 'new.len', chunk.length);
+            console.log(`[diff:${dbgTag}] old.preview`, vis(oldChunk.slice(0, 120)));
+            console.log(`[diff:${dbgTag}] new.preview`, vis(chunk.slice(0, 120)));
+          } catch {}
+        }
+        const refined = tokenDiffStrings(oldChunk, chunk, dbgTag);
         for (const d of refined) {
           const L = out.length; if (L && out[L-1][0] === d[0]) out[L-1][1] += d[1]; else out.push([d[0], d[1]]);
         }
@@ -235,19 +255,19 @@ self.onmessage = (ev) => {
       void timeout; void editCost;
 
       // Prefer granular (line+token) diffs for readability
-      if (debugTag) console.groupCollapsed(`[diff:${debugTag}] start`);
+      if (debugTag) console.log(`[diff:${debugTag}] start`);
       if (debugTag) {
         const vis = (s) => String(s).replace(/\n/g, '⏎').replace(/ /g, '␠');
-        console.log('baseline.len', baseText.length, 'next.len', nextText.length);
-        console.log('baseline.preview', vis(baseText.slice(0,120)));
-        console.log('next.preview', vis(nextText.slice(0,120)));
+        console.log(`[diff:${debugTag}] baseline.len`, baseText.length, 'next.len', nextText.length);
+        console.log(`[diff:${debugTag}] baseline.preview`, vis(baseText.slice(0,120)));
+        console.log(`[diff:${debugTag}] next.preview`, vis(nextText.slice(0,120)));
         const aLines0 = splitLinesKeepNL(baseText);
         const bLines0 = splitLinesKeepNL(nextText);
         const preL = commonPrefixLen(aLines0, bLines0);
         const aTail0 = aLines0.slice(preL);
         const bTail0 = bLines0.slice(preL);
         const postL = commonSuffixLen(aTail0, bTail0);
-        console.log('lines.pre', preL, 'lines.post', postL, 'a.mid.lines', aLines0.length - preL - postL, 'b.mid.lines', bLines0.length - preL - postL);
+        console.log(`[diff:${debugTag}] lines.pre`, preL, 'lines.post', postL, 'a.mid.lines', aLines0.length - preL - postL, 'b.mid.lines', bLines0.length - preL - postL);
       }
 
       let diffs = granularDiff(baseText, nextText);
@@ -330,9 +350,8 @@ self.onmessage = (ev) => {
         const statsDbg = computeStats(diffs);
         const vis = (s) => String(s).replace(/\n/g, '⏎').replace(/ /g, '␠');
         const sample = diffs.slice(0, 8).map(([op,s]) => [op, vis(String(s).slice(0, 48))]);
-        console.log('strategy', strategy, 'stats', statsDbg, 'ops', diffs.length);
-        console.log('ops.sample', sample);
-        console.groupEnd?.();
+        console.log(`[diff:${debugTag}] strategy`, strategy, 'stats', statsDbg, 'ops', diffs.length);
+        console.log(`[diff:${debugTag}] ops.sample`, sample);
       }
       const patchText = patch_toText_fromDiffs(diffs);
 
