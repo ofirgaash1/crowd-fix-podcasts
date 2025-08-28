@@ -318,6 +318,13 @@ self.onmessage = (ev) => {
       const reconstructOld = (ops) => { try { return (ops || []).map(([op, s]) => (op === 1 ? '' : (s || ''))).join(''); } catch { return ''; } };
       let okNew = canon(reconstructNew(diffs)) === canon(nextText);
       let okOld = canon(reconstructOld(diffs)) === canon(baseText);
+      if (debugTag) {
+        try {
+          const rn = reconstructNew(diffs); const ro = reconstructOld(diffs);
+          console.log(`[diff:${debugTag}] recon.len new`, rn.length, 'old', ro.length);
+          console.log(`[diff:${debugTag}] canon.ok new`, okNew, 'old', okOld);
+        } catch {}
+      }
       if (!(okNew && okOld)) {
         // Fallback 1: pure char-level trimmed diff
         try {
