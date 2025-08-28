@@ -5,6 +5,41 @@ import { canonicalizeText } from '../shared/canonical.js';
 import { saveTranscriptVersion, saveTranscriptEdit, saveCorrectionToDB, markCorrection, getLatestTranscript, getTranscriptVersion, saveConfirmations, sha256Hex } from '../data/api.js';
 
 export function setupUIControls(els, { workers }, virtualizer, playerCtrl, isIdle) {
+  // Probability highlight toggle
+  if (els.probToggle) {
+    const LS_KEY = 'probHL';
+    const readPref = () => {
+      try { return (localStorage.getItem(LS_KEY) ?? 'on') !== 'off'; } catch { return true; }
+    };
+    const writePref = (on) => { try { localStorage.setItem(LS_KEY, on ? 'on' : 'off'); } catch {} };
+    const updateBtn = (on) => { els.probToggle.setAttribute('aria-pressed', on ? 'true' : 'false'); };
+
+    // Initialize from store or fallback to localStorage
+    try {
+      const st = getState();
+      const initOn = (st?.settings && typeof st.settings.probEnabled === 'boolean') ? !!st.settings.probEnabled : readPref();
+      updateBtn(initOn);
+      // Ensure store reflects persisted pref on first load
+      if (initOn !== !!st?.settings?.probEnabled) {
+        store.setProbEnabled(initOn);
+      }
+    } catch { /* noop */ }
+
+    els.probToggle.addEventListener('click', () => {
+      const cur = (els.probToggle.getAttribute('aria-pressed') === 'true');
+      const next = !cur;
+      updateBtn(next);
+      writePref(next);
+      try { store.setProbEnabled(next); } catch {}
+    });
+
+    // Keep button in sync if state changes elsewhere
+    try {
+      store.subscribe((st, tag) => {
+        if (tag === 'settings:probEnabled') updateBtn(!!st.settings?.probEnabled);
+      });
+    } catch { /* noop */ }
+  }
   // Download VTT
   const formatTimeVTT = (t) => {
     const ms = Math.max(0, Math.floor((+t || 0) * 1000));
