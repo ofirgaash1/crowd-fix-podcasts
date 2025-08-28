@@ -12,7 +12,11 @@ export function setupUIControls(els, { workers }, virtualizer, playerCtrl, isIdl
       try { return (localStorage.getItem(LS_KEY) ?? 'on') !== 'off'; } catch { return true; }
     };
     const writePref = (on) => { try { localStorage.setItem(LS_KEY, on ? 'on' : 'off'); } catch {} };
-    const updateBtn = (on) => { els.probToggle.setAttribute('aria-pressed', on ? 'true' : 'false'); };
+    const updateBtn = (on) => {
+      els.probToggle.setAttribute('aria-pressed', on ? 'true' : 'false');
+      // Hebrew labels: on=true => show "cancel highlights"; off => "highlight low confidence"
+      els.probToggle.textContent = on ? 'בטל הדגשות' : 'הדגש ודאות נמוכה';
+    };
 
     // Initialize from store or fallback to localStorage
     try {
