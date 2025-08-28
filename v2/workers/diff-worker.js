@@ -270,7 +270,7 @@ self.onmessage = (ev) => {
         console.log(`[diff:${debugTag}] lines.pre`, preL, 'lines.post', postL, 'a.mid.lines', aLines0.length - preL - postL, 'b.mid.lines', bLines0.length - preL - postL);
       }
 
-      let diffs = granularDiff(baseText, nextText);
+      let diffs = granularDiff(baseText, nextText, debugTag);
       let strategy = 'granular';
       // If something goes wrong (unlikely), fall back to previous strategies
       if (!Array.isArray(diffs) || diffs.length === 0) {
