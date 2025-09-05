@@ -22,13 +22,54 @@ def _safe_str(x) -> str:
 @bp.route("/folders", methods=["GET"])
 def list_folders():
     audio_dir: Path = current_app.config.get("AUDIO_DIR")
-    if not audio_dir or not Path(audio_dir).exists():
-        return jsonify([])
+    trans_dir: Path = current_app.config.get("TRANSCRIPTS_DIR")
+
     items = []
-    for p in sorted(Path(audio_dir).iterdir(), key=lambda x: x.name.lower()):
-        if p.is_dir():
-            items.append({"name": p.name, "type": "directory"})
-    return jsonify(items)
+    # Prefer local audio dir if it contains sensible folders (with audio files)
+    try:
+        if audio_dir and Path(audio_dir).exists():
+            for p in sorted(Path(audio_dir).iterdir(), key=lambda x: x.name.lower()):
+                if p.is_dir():
+                    # Only include if folder contains at least one plausible audio file
+                    has_audio = any(
+                        (c.is_file() and c.suffix.lower() in (".opus", ".mp3", ".wav", ".m4a"))
+                        for c in p.iterdir()
+                    )
+                    if has_audio:
+                        items.append({"name": p.name, "type": "directory"})
+        if items:
+            return jsonify(items)
+    except Exception:
+        pass
+
+    # Fallback: derive folders from transcripts structure
+    try:
+        if trans_dir and Path(trans_dir).exists():
+            # Look for <trans_dir>/*/*/full_transcript.json.gz (1-level folders)
+            seen = set()
+            for p in Path(trans_dir).rglob("full_transcript.json.gz"):
+                try:
+                    folder = p.parent.parent.name
+                    if folder:
+                        seen.add(folder)
+                except Exception:
+                    continue
+            # Also handle flat JSON
+            for p in Path(trans_dir).rglob("*.json"):
+                try:
+                    if p.name == "full_transcript.json.gz":
+                        continue
+                    folder = p.parent.name
+                    if folder:
+                        seen.add(folder)
+                except Exception:
+                    continue
+            items = [{"name": f, "type": "directory"} for f in sorted(seen, key=lambda x: x.lower())]
+            return jsonify(items)
+    except Exception:
+        pass
+
+    return jsonify([])
 
 
 @bp.route("/files", methods=["GET"])
@@ -37,31 +78,69 @@ def list_files():
     if not folder:
         abort(400, "missing ?folder=")
     audio_dir: Path = current_app.config.get("AUDIO_DIR")
-    base = Path(audio_dir) / folder
-    if not base.exists() or not base.is_dir():
-        return jsonify([])
-    files = []
-    for p in sorted(base.iterdir(), key=lambda x: x.name.lower()):
-        if p.is_file() and p.suffix.lower() in (".opus", ".mp3", ".wav", ".m4a"):
-            try:
-                size = p.stat().st_size
-            except Exception:
-                size = 0
-            files.append({"name": p.name, "type": "file", "size": size})
-    return jsonify(files)
+    trans_dir: Path = current_app.config.get("TRANSCRIPTS_DIR")
+
+    # Prefer local audio files if present
+    try:
+        base = Path(audio_dir) / folder if audio_dir else None
+        if base and base.exists() and base.is_dir():
+            files = []
+            for p in sorted(base.iterdir(), key=lambda x: x.name.lower()):
+                if p.is_file() and p.suffix.lower() in (".opus", ".mp3", ".wav", ".m4a"):
+                    try:
+                        size = p.stat().st_size
+                    except Exception:
+                        size = 0
+                    files.append({"name": p.name, "type": "file", "size": size})
+            if files:
+                return jsonify(files)
+    except Exception:
+        pass
+
+    # Fallback: derive file list from transcripts for the folder (assume .opus names)
+    try:
+        stems = set()
+        if trans_dir and Path(trans_dir).exists():
+            for p in Path(trans_dir).rglob("full_transcript.json.gz"):
+                try:
+                    if p.parent.parent.name == folder:
+                        stems.add(p.parent.name)
+                except Exception:
+                    continue
+            # Also pick up flat JSON under folder
+            base_json = Path(trans_dir) / folder
+            if base_json.exists():
+                for p in base_json.glob("*.json"):
+                    stems.add(p.stem)
+        files = [{"name": f"{s}.opus", "type": "file", "size": 0} for s in sorted(stems, key=lambda x: x.lower())]
+        return jsonify(files)
+    except Exception:
+        pass
+
+    return jsonify([])
 
 
 def _read_transcript_json(transcripts_dir: Path, folder: str, file_name: str) -> Optional[dict | list]:
     stem = Path(file_name).with_suffix("").name
-    # Expected layout: <TRANSCRIPTS_DIR>/<folder>/<stem>/full_transcript.json.gz
-    gz_path = Path(transcripts_dir) / folder / stem / "full_transcript.json.gz"
-    json_path = Path(transcripts_dir) / folder / f"{stem}.json"
-    if gz_path.exists():
-        with gzip.open(gz_path, "rb") as fh:
-            return orjson.loads(fh.read())
-    if json_path.exists():
-        with open(json_path, "rb") as fh:
-            return orjson.loads(fh.read())
+    # Primary expected layout + fallbacks
+    candidates = [
+        Path(transcripts_dir) / folder / stem / "full_transcript.json.gz",
+        # Legacy/alternate nested layout: <TRANSCRIPTS_DIR>/json/<folder>/<stem>/full_transcript.json.gz
+        Path(transcripts_dir) / "json" / folder / stem / "full_transcript.json.gz",
+        # Flat JSON (non-gz) fallback
+        Path(transcripts_dir) / folder / f"{stem}.json",
+        Path(transcripts_dir) / "json" / folder / f"{stem}.json",
+    ]
+    for p in candidates:
+        try:
+            if p.suffix == ".json" and p.exists():
+                with open(p, "rb") as fh:
+                    return orjson.loads(fh.read())
+            if p.suffix.endswith(".gz") and p.exists():
+                with gzip.open(p, "rb") as fh:
+                    return orjson.loads(fh.read())
+        except Exception:
+            continue
     return None
 
 
@@ -81,13 +160,22 @@ def get_episode():
     if tr is None:
         abort(404, "transcript not found")
 
-    # Audio URL served by our /audio/<path> route
-    # Keep relative URL so the frontend can use it directly
-    audio_rel = f"/audio/{folder}/{file_name}"
+    # Audio URL: prefer local /audio route, fallback to remote HF dataset URL
+    audio_path = Path(audio_dir) / folder / file_name
+    if audio_path.exists():
+        audio_url = f"/audio/{folder}/{file_name}"
+    else:
+        # Remote fallback (HF dataset). Frontend can fetch directly.
+        from urllib.parse import quote
+        dataset = "ivrit-ai/audio-v2-opus"
+        audio_url = (
+            "https://huggingface.co/datasets/" + dataset + "/resolve/main/" +
+            "/".join([quote(seg) for seg in (folder.split('/') + [file_name]) if seg])
+        )
 
     # Shape purposely minimal; frontend will normalize words/tokens
     return jsonify({
-        "audioUrl": audio_rel,
+        "audioUrl": audio_url,
         "transcript": tr
     })
 

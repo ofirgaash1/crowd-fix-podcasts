@@ -55,11 +55,11 @@ The goal: one cohesive tool for managing, editing, and aligning long-form transc
 ## Repo Structure
 
 ```
-/frontend/v2/       → Transcript editor (JS/HTML/CSS)
-/backend/explore/   → Flask app (API + DB access)
-/db/                → SQLite schema, migrations, seed scripts
-/tests/             → Shared test suite (frontend + backend)
-/README.md          → This document
+/v2/         → Transcript editor (JS/HTML/CSS)
+/explore/    → Flask app (API + DB access)
+/audio/      → Optional local audio files (see Data Layout)
+/json/       → Transcripts (gz JSON); indexing scans recursively
+/README.md   → This document
 ```
 
 ---
@@ -83,11 +83,19 @@ pip install -r explore/requirements.txt
 ```
 
 3) Prepare data directories
-- Create a data root with the following layout:
+- Create a data root with the following layout (minimum is `json/`):
 ```
-<data_root>/audio/<folder>/<file>.opus
 <data_root>/json/<folder>/<file_stem>/full_transcript.json.gz
+# Optional for local playback
+<data_root>/audio/<folder>/<file>.opus
 ```
+- Flexibility/fallbacks added:
+  - Transcripts are discovered recursively. Both of these work:
+    - `<data_root>/json/<folder>/<stem>/full_transcript.json.gz`
+    - `<data_root>/json/json/<folder>/<stem>/full_transcript.json.gz` (legacy nested)
+  - The folder/file browser prefers local audio. If no local audio is found, it derives folder/file lists from the transcripts.
+  - Episode responses prefer local `/audio/<folder>/<file>`; if missing, the backend returns a Hugging Face URL: `https://huggingface.co/datasets/ivrit-ai/audio-v2-opus/resolve/main/<folder>/<file>`.
+  - Frontend can also fall back to Hugging Face listings if the backend has no local audio (add your HF token in the settings ⚙️ modal).
 
 4) Run the backend (dev mode)
 ```bash
@@ -106,7 +114,7 @@ python explore/run.py --data-dir <data_root> --dev
 Notes
 - The backend stores its SQLite database at `<data_root>/explore.sqlite`.
 - In dev mode, authentication is bypassed via `TS_USER_EMAIL`; see `explore/run.py`.
-- If you rely on Hugging Face fallbacks (folders/files/audio), add your HF token via the settings ⚙️ button.
+- If you rely on Hugging Face fallbacks (folders/files/audio), add your HF token via the settings ⚙️ button. The backend now also emits HF audio URLs when local files are missing.
 
 ---
 
