@@ -138,6 +138,33 @@
     </div>
   </div>
 
+  <!-- Merge conflict modal -->
+  <div id="mergeModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="mergeTitle">
+    <div class="modal-content" role="document">
+      <header class="modal-head">
+        <h3 id="mergeTitle">התנגשות גרסאות</h3>
+      </header>
+      <div class="modal-body" style="max-height:50vh; overflow:auto;">
+        <p>נמצאה התנגשות בשמירה. להלן ההבדלים:</p>
+        <div class="grid" style="grid-template-columns:1fr 1fr; gap:8px;">
+          <div>
+            <h4 style="margin-top:0">בסיס → העדכנית</h4>
+            <pre id="diffParentLatest" style="white-space:pre-wrap; background:var(--bg-2); padding:8px; border-radius:6px;"></pre>
+          </div>
+          <div>
+            <h4 style="margin-top:0">בסיס → השינויים שלי</h4>
+            <pre id="diffParentClient" style="white-space:pre-wrap; background:var(--bg-2); padding:8px; border-radius:6px;"></pre>
+          </div>
+        </div>
+      </div>
+      <footer class="modal-foot">
+        <button id="mergeReload" class="pill" type="button">טען העדכנית</button>
+        <button id="mergeTry" class="pill" type="button">מיזוג אוטומטי (בטא)</button>
+        <button id="mergeClose" class="pill" type="button">סגור</button>
+      </footer>
+    </div>
+  </div>
+
   <!-- Optional meta paragraph referenced by audio aria-describedby -->
   <p id="meta" class="visually-hidden">מידע על קובץ האודיו יוצג כאן.</p>
 

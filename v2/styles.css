@@ -540,6 +540,10 @@ header {
   z-index: 50;
 }
 
+/* Merge modal reuses same styles via .modal */
+#mergeModal { display:none; }
+#mergeModal.open { display:block; }
+
 /* ===========================
    Toasts
    =========================== */

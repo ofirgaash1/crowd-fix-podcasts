@@ -12,6 +12,7 @@ import { setupKaraokeFollow } from './player/karaoke.js';
 import { setupSettingsModal } from './ui/settings-modal.js';
 import { setupThemeToggle } from './ui/theme.js';
 import { setupUIControls } from './ui/controls.js';
+import { setupMergeModal } from './ui/merge-modal.js';
 import { setupHud } from './ui/hud.js';
 import { setupEditorPipeline as setupEditorPipelineMod, setShowingLayers as setLayersFlag, getTypingQuietUntil, setTypingQuiet as setTypingQuiet } from './editor/pipeline.js';
 import { initWorkers } from './workers/init.js';
@@ -54,6 +55,13 @@ const els = {
   diffCard: document.getElementById('diffCard'),
   transcriptCard: document.getElementById('transcriptCard'),
   showLayersBtn: document.getElementById('showLayersBtn'),
+  // Merge modal elements
+  mergeModal: document.getElementById('mergeModal'),
+  mergeReload: document.getElementById('mergeReload'),
+  mergeTry: document.getElementById('mergeTry'),
+  mergeClose: document.getElementById('mergeClose'),
+  diffParentLatest: document.getElementById('diffParentLatest'),
+  diffParentClient: document.getElementById('diffParentClient'),
 };
 
 // Global edit generation: increments on input/IME end or document switch
@@ -183,11 +191,14 @@ Promise.resolve(supaReady).catch(() => { }).finally(() => {
 // Initialize settings modal
 setupSettingsModal(els);
 
+// Initialize merge modal (handlers are wired in controls)
+const mergeModal = setupMergeModal(els);
+
 // Initialize theme toggle
 setupThemeToggle(els);
 
 // Wire UI controls (rate, VTT, font, confirm, back-to-top)
-setupUIControls(els, { workers }, virtualizer, playerCtrl, isIdle);
+setupUIControls(els, { workers, mergeModal }, virtualizer, playerCtrl, isIdle);
 
 // Gutters and scroll sync
 setupGutters(els);

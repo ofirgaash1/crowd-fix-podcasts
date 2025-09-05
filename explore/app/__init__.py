@@ -15,7 +15,11 @@ def create_app(data_dir: str, index_file: str = None):
     # Configure paths
     app.config['DATA_DIR'] = data_dir
     app.config['AUDIO_DIR'] = Path(data_dir) / "audio"
+    # Transcripts (JSON/GZ) live under data/json
+    app.config['TRANSCRIPTS_DIR'] = Path(data_dir) / "json"
     app.config['INDEX_FILE'] = index_file
+    # Unified SQLite path under data dir (used by transcripts/confirmations)
+    app.config['SQLITE_PATH'] = str(Path(data_dir) / 'explore.sqlite')
         
     # Configure PostHog
     app.config['POSTHOG_API_KEY'] = os.environ.get('POSTHOG_API_KEY', '')
@@ -43,11 +47,15 @@ def create_app(data_dir: str, index_file: str = None):
  
     # Register blueprints
     from .routes import main, search, auth, export, audio
+    from .routes import transcripts
+    from .routes import browser
     app.register_blueprint(main.bp)
     app.register_blueprint(search.bp)
     app.register_blueprint(auth.bp)
     app.register_blueprint(export.bp)
     app.register_blueprint(audio.bp)
+    app.register_blueprint(transcripts.bp)
+    app.register_blueprint(browser.bp)
         
     return app
 
