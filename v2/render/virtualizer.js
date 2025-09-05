@@ -14,16 +14,17 @@ export class ScrollVirtualizer {
 
     this.container = container;
     this.scrollEl = scrollEl || container;
-    this.renderer = renderer || new OverlayRenderer({ container, windowSize: 800 });
+    this.renderer = renderer || new OverlayRenderer({ container, windowSize: 1000, overscan: 400 });
 
     // cached inputs
     this.tokens = [];
     this.absIndex = [];
 
     // windowing helpers
-    this.windowSize = 800;
+    this.windowSize = 1000;
     this._onScroll = this._onScroll?.bind ? this._onScroll.bind(this) : () => {};
     this.scrollEl.addEventListener('scroll', () => this._onScroll(), { passive: true });
+    this._lastStart = 0;
   }
 
   /** Replace tokens and repaint everything */
@@ -66,6 +67,25 @@ export class ScrollVirtualizer {
     };
   }
 
+  /** Programmatically scroll window to center around a token index */
+  scrollToTokenIndex(index) {
+    const totalTokens = (this.tokens || []).length;
+    if (!totalTokens) return;
+    const core = Math.max(0, Math.min(totalTokens - 1, Math.floor(index || 0)));
+    const maxStart = Math.max(0, totalTokens - this.windowSize);
+    const start = Math.max(0, Math.min(maxStart, core - Math.floor(this.windowSize / 2)));
+    this._lastStart = start;
+    this.renderer.setWindowSize(this.windowSize);
+    this.renderer.setWindowStart(start);
+    // Adjust scrollTop to match desired window position so onScroll doesn't override
+    try {
+      const el = this.scrollEl || this.container;
+      const sh = el.scrollHeight - el.clientHeight;
+      const ratio = maxStart > 0 ? (start / maxStart) : 0;
+      el.scrollTop = Math.max(0, Math.min(sh, Math.floor(ratio * sh)));
+    } catch {}
+  }
+
   _onScroll() {
     if (this._scrollThrottle) return;
     this._scrollThrottle = true;
@@ -79,9 +99,13 @@ export class ScrollVirtualizer {
     const el = this.scrollEl || this.container;
     const sh = el.scrollHeight - el.clientHeight;
     const ratio = sh > 0 ? Math.max(0, Math.min(1, el.scrollTop / sh)) : 0;
-    const start = Math.floor(ratio * maxStart);
-    this.renderer.setWindowSize(this.windowSize);
-    this.renderer.setWindowStart(start);
+    const proposed = Math.floor(ratio * maxStart);
+    const hysteresis = Math.floor(this.windowSize / 4);
+    if (Math.abs(proposed - this._lastStart) >= hysteresis) {
+      this._lastStart = proposed;
+      this.renderer.setWindowSize(this.windowSize);
+      this.renderer.setWindowStart(proposed);
+    }
   }
 
   /** Cleanup hook (kept minimal; OverlayRenderer owns the DOM) */

@@ -1,0 +1,5 @@
+*.opus
+*.gz
+audio
+app.log
+explore.sqlite

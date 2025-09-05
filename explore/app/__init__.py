@@ -15,7 +15,11 @@ def create_app(data_dir: str, index_file: str = None):
     # Configure paths
     app.config['DATA_DIR'] = data_dir
     app.config['AUDIO_DIR'] = Path(data_dir) / "audio"
+    # Transcripts (JSON/GZ) live under data/json
+    app.config['TRANSCRIPTS_DIR'] = Path(data_dir) / "json"
     app.config['INDEX_FILE'] = index_file
+    # Unified SQLite path under data dir (used by transcripts/confirmations)
+    app.config['SQLITE_PATH'] = str(Path(data_dir) / 'explore.sqlite')
         
     # Configure PostHog
     app.config['POSTHOG_API_KEY'] = os.environ.get('POSTHOG_API_KEY', '')
@@ -41,13 +45,28 @@ def create_app(data_dir: str, index_file: str = None):
         google = init_oauth(app)
         app.extensions['google_oauth'] = google
  
+    # Build audio index (local-only) for fast, robust resolution
+    try:
+        from .utils import build_audio_index
+        audio_idx = build_audio_index(str(app.config['AUDIO_DIR']))
+        app.config['AUDIO_INDEX'] = audio_idx
+    except Exception as e:
+        # Non-fatal: resolver will fall back to globbing
+        app.config['AUDIO_INDEX'] = {}
+
     # Register blueprints
     from .routes import main, search, auth, export, audio
+    from .routes import transcripts
+    from .routes import browser
+    from .routes import frontend as frontend_static
     app.register_blueprint(main.bp)
     app.register_blueprint(search.bp)
     app.register_blueprint(auth.bp)
     app.register_blueprint(export.bp)
     app.register_blueprint(audio.bp)
+    app.register_blueprint(transcripts.bp)
+    app.register_blueprint(browser.bp)
+    app.register_blueprint(frontend_static.bp)
         
     return app
 
@@ -64,7 +83,7 @@ def init_index_manager(app, file_records=None, index_file=None, force_reindex=Fa
     # Set default database parameters if not provided
     if not db_kwargs:
         db_kwargs = {
-            "path": os.environ.get('SQLITE_PATH', 'explore.sqlite')
+            "path": app.config.get('SQLITE_PATH', os.environ.get('SQLITE_PATH', 'explore.sqlite'))
         }
     
     if index_file:

@@ -137,15 +137,15 @@ class TranscriptIndex:
 
 
 def _setup_schema(db: DatabaseService):
-    """Create the transcript database schema."""
+    """Create the transcript database schema (idempotent)."""
     # Apply SQLite performance optimizations
     db.execute("PRAGMA journal_mode = WAL")
     db.execute("PRAGMA synchronous = NORMAL")
     db.execute("PRAGMA cache_size = 1000000")
     
-    # Create documents table
+    # Create documents table (idempotent)
     db.execute("""
-        CREATE TABLE documents (
+        CREATE TABLE IF NOT EXISTS documents (
             doc_id INTEGER PRIMARY KEY,
             source VARCHAR,
             episode VARCHAR,
@@ -153,9 +153,9 @@ def _setup_schema(db: DatabaseService):
         )
     """)
     
-    # Create segments table
+    # Create segments table (idempotent)
     db.execute("""
-        CREATE TABLE segments (
+        CREATE TABLE IF NOT EXISTS segments (
             doc_id INTEGER,
             segment_id INTEGER,
             segment_text TEXT,
@@ -169,22 +169,22 @@ def _setup_schema(db: DatabaseService):
     
     # Create indexes for better performance
     db.execute("""
-        CREATE INDEX idx_segments_doc_id 
+        CREATE INDEX IF NOT EXISTS idx_segments_doc_id 
         ON segments(doc_id)
     """)
     
     db.execute("""
-        CREATE INDEX idx_segments_segment_id 
+        CREATE INDEX IF NOT EXISTS idx_segments_segment_id 
         ON segments(segment_id)
     """)
     
     db.execute("""
-        CREATE INDEX idx_segments_char_offset 
+        CREATE INDEX IF NOT EXISTS idx_segments_char_offset 
         ON segments(char_offset)
     """)
     
     db.execute("""
-        CREATE INDEX idx_segments_doc_id_segment_id 
+        CREATE INDEX IF NOT EXISTS idx_segments_doc_id_segment_id 
         ON segments(doc_id, segment_id)
     """)
 
@@ -273,9 +273,17 @@ class IndexManager:
         # Setup schema
         log.info("Setting up schema...")
         _setup_schema(db)
+        # Clear previous index data to allow rebuild without UNIQUE conflicts
+        try:
+            db.execute("DELETE FROM segments")
+            db.execute("DELETE FROM documents")
+            db.commit()
+        except Exception as e:
+            # If tables are empty or not present yet, ignore
+            log.debug(f"Index cleanup skipped/failed: {e}")
         
         # Use CPU count for thread pool size, but cap at 16 to avoid too many threads
-        n_threads = min(1, os.cpu_count() or 4)
+        n_threads = min(4, os.cpu_count() or 4)
         log.info(f"Building index with {n_threads} threads for {total_files} files")
         
         with ThreadPoolExecutor(max_workers=n_threads) as executor:

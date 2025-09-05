@@ -40,6 +40,8 @@ export class OverlayRenderer {
    *   container?: HTMLElement,
    *   probEnabled?: boolean,
    *   probThreshold?: number,   // e.g. 0.95
+   *   windowSize?: number,
+   *   overscan?: number,        // extra tokens above/below to stabilize edges
    * }} opts
    */
   constructor(opts = {}) {
@@ -63,7 +65,8 @@ export class OverlayRenderer {
 
     // windowing (virtualization)
     this.windowStart = 0;
-    this.windowSize = Math.max(200, Math.min(2000, opts.windowSize || 800));
+    this.windowSize = Math.max(200, Math.min(5000, opts.windowSize || 800));
+    this._overscan = Math.max(50, Math.min(2000, opts.overscan || 300));
   }
 
   /** attach/replace the container element */
@@ -226,14 +229,16 @@ export class OverlayRenderer {
     }
 
     const total = toks.length;
-    const start = Math.max(0, Math.min(this.windowStart, Math.max(0, total - 1)));
-    const end = Math.min(total, start + this.windowSize);
+    const coreStart = Math.max(0, Math.min(this.windowStart, Math.max(0, total - 1)));
+    const coreEnd = Math.min(total, coreStart + this.windowSize);
+    // Render a buffered window to avoid edge flicker within the viewport
+    const start = Math.max(0, coreStart - this._overscan);
+    const end = Math.min(total, coreEnd + this._overscan);
     const startChar = abs[start] || 0;
     let endChar;
     if (end >= total) {
       endChar = fullText.length;
     } else {
-      const tEnd = toks[end];
       // end char is before token[end], so up to its start
       endChar = abs[end] || fullText.length;
       if (!Number.isFinite(endChar)) endChar = fullText.length;

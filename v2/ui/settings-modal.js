@@ -2,44 +2,14 @@
 // Settings modal for managing HF token (or other simple settings)
 
 export function setupSettingsModal(els) {
-  if (!els?.settingsBtn || !els?.modal || !els?.hfToken || !els?.mSave || !els?.mClear || !els?.mClose) return;
+  if (!els?.settingsBtn || !els?.modal || !els?.mClose) return;
 
-  function loadCurrentToken() {
-    try { return localStorage.getItem('hfToken') || ''; } catch { return ''; }
-  }
-  function saveToken() {
-    try { localStorage.setItem('hfToken', String(els.hfToken.value || '')); } catch {}
-    updateSettingsButtonText();
-  }
-  function clearToken() {
-    try { localStorage.removeItem('hfToken'); } catch {}
-    els.hfToken.value = '';
-    updateSettingsButtonText();
-  }
-  function updateSettingsButtonText() {
-    try {
-      const tok = loadCurrentToken();
-      els.settingsBtn.textContent = tok ? '⚙️ הגדרות (✓)' : '⚙️ הגדרות';
-    } catch {}
-  }
-  function openModal() {
-    els.hfToken.value = loadCurrentToken();
-    els.modal.classList.add('open');
-    els.hfToken.focus();
-  }
-  function closeModal() {
-    els.modal.classList.remove('open');
-    els.settingsBtn.focus();
-  }
+  function openModal() { try { els.modal.classList.add('open'); } catch {} }
+  function closeModal() { try { els.modal.classList.remove('open'); els.settingsBtn?.focus(); } catch {} }
 
-  els.settingsBtn.addEventListener('click', openModal);
-  els.mSave.addEventListener('click', () => { saveToken(); closeModal(); });
-  els.mClear.addEventListener('click', clearToken);
-  els.mClose.addEventListener('click', closeModal);
-
-  els.modal.addEventListener('click', (e) => { if (e.target === els.modal) closeModal(); });
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && els.modal.classList.contains('open')) closeModal(); });
-
-  updateSettingsButtonText();
+  try { els.settingsBtn.addEventListener('click', openModal); } catch {}
+  try { els.mClose.addEventListener('click', closeModal); } catch {}
+  try { els.modal.addEventListener('click', (e) => { if (e.target === els.modal) closeModal(); }); } catch {}
+  try { document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && els.modal.classList.contains('open')) closeModal(); }); } catch {}
 }
 

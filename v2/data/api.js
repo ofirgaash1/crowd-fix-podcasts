@@ -5,6 +5,19 @@
 // ---- Optional Supabase client (pass from your app) ----
 let supa = null;
 let correctionsCache = new Set();
+// Optional backend base URL detection (for local dev over file://)
+let RUNTIME_BASE = '';
+function setRuntimeBase(b) { try { if (b) { RUNTIME_BASE = String(b); if (typeof window !== 'undefined') window.EXPLORE_API_BASE = RUNTIME_BASE; } } catch {}
+}
+function getBackendBase() {
+  try {
+    if (RUNTIME_BASE) return RUNTIME_BASE;
+    if (typeof window !== 'undefined' && window.EXPLORE_API_BASE) return String(window.EXPLORE_API_BASE);
+    if (typeof location !== 'undefined' && /^https?:$/.test(location.protocol)) return location.origin;
+    if (typeof location !== 'undefined' && location.protocol === 'file:') return 'http://localhost:5000';
+  } catch {}
+  return '';
+}
 
 /**
  * Configure Supabase. Call once from app bootstrap:
@@ -182,36 +195,22 @@ async function decodeMaybeGzip(response, originalUrl = '') {
  * @returns {Promise<Array<{name: string, type: 'directory'}>>}
  */
 export async function listFolders() {
-  const urls = hfApiUrl('', DS_AUDIO);
-  let lastErr = null;
-
-  for (const url of urls) {
-    try {
-      const response = await fetchHF(url);
-      
-      if (response.status === 401 && !getHFToken()) {
-        throw new Error('401: נדרש טוקן Hugging Face כדי לטעון את רשימת התיקיות');
-      }
-      if (!response.ok) {
-        lastErr = new Error(`שגיאת רשת (${response.status}) בעת טעינת רשימת תיקיות`);
-        continue;
-      }
-      
-      const data = await response.json();
-      const items = extractItems(data);
-      const dirs = filterImmediate(items, '')
-        .filter(x => (x.type === 'directory' || x.type === 'tree' || x.type === 'dir'))
-        .map(x => x.path.split('/').pop())
-        .sort((a, b) => a.localeCompare(b, 'he'));
-      
-      return dirs.map(name => ({ name, type: 'directory' }));
-    } catch (error) {
-      lastErr = error;
-    }
+  const base = getBackendBase();
+  const url = base ? `${base}/folders` : '/folders';
+  let r;
+  try {
+    r = await fetch(url, base ? undefined : { credentials: 'include' });
+  } catch (e) {
+    throw new Error(`שגיאה בטעינת רשימת תיקיות: כשל רשת אל ${url}: ${e?.message || e}`);
   }
-  
-  console.warn('Failed to list folders:', lastErr);
-  throw lastErr || new Error('שגיאה בטעינת רשימת תיקיות');
+  if (!r.ok) {
+    let body = '';
+    try { body = await r.text(); } catch {}
+    throw new Error(`שגיאה בטעינת רשימת תיקיות: ${r.status} ${r.statusText} מ-${url}${body ? ` — ${body.slice(0, 200)}` : ''}`);
+  }
+  let arr = [];
+  try { arr = await r.json(); } catch (e) { throw new Error(`שגיאה בפענוח JSON מרשימת תיקיות: ${e?.message || e}`); }
+  return Array.isArray(arr) ? arr.map(x => ({ name: x.name, type: 'directory' })) : [];
 }
 
 /**
@@ -221,45 +220,22 @@ export async function listFolders() {
  */
 export async function listFiles(folder) {
   if (!folder) return [];
-  
-  const urls = hfApiUrl(folder, DS_AUDIO);
-  let lastErr = null;
-
-  for (const url of urls) {
-    try {
-      const response = await fetchHF(url);
-      
-      if (response.status === 401 && !getHFToken()) {
-        throw new Error('401: נדרש טוקן Hugging Face כדי לטעון את רשימת הקבצים');
-      }
-      if (!response.ok) {
-        lastErr = new Error(`שגיאת רשת (${response.status}) בעת טעינת רשימת קבצים`);
-        continue;
-      }
-      
-      const data = await response.json();
-      const items = extractItems(data);
-      const files = filterImmediate(items, folder)
-        .filter(x => {
-          const t = (x.type || '').toLowerCase();
-          const p = x.path || '';
-          return (t === 'file' || t === 'blob' || t === 'lfs' || p.toLowerCase().endsWith('.opus'));
-        })
-        .map(x => (x.path || '').split('/').pop())
-        .sort((a, b) => a.localeCompare(b, 'he'));
-      
-      return files.map(name => ({ 
-        name, 
-        type: 'file', 
-        size: 0 
-      }));
-    } catch (error) {
-      lastErr = error;
-    }
+  const base = getBackendBase();
+  const url = base ? `${base}/files?folder=${encodeURIComponent(folder)}` : `/files?folder=${encodeURIComponent(folder)}`;
+  let r;
+  try {
+    r = await fetch(url, base ? undefined : { credentials: 'include' });
+  } catch (e) {
+    throw new Error(`שגיאה בטעינת רשימת קבצים: כשל רשת אל ${url}: ${e?.message || e}`);
   }
-  
-  console.warn('Failed to list files:', lastErr);
-  throw lastErr || new Error('שגיאה בטעינת רשימת קבצים');
+  if (!r.ok) {
+    let body = '';
+    try { body = await r.text(); } catch {}
+    throw new Error(`שגיאה בטעינת רשימת קבצים: ${r.status} ${r.statusText} מ-${url}${body ? ` — ${body.slice(0, 200)}` : ''}`);
+  }
+  let arr = [];
+  try { arr = await r.json(); } catch (e) { throw new Error(`שגיאה בפענוח JSON מרשימת קבצים: ${e?.message || e}`); }
+  return Array.isArray(arr) ? arr.map(x => ({ name: x.name, type: 'file', size: +x.size || 0 })) : [];
 }
 
 // ---- Normalization: transcript JSON → flat tokens -----------------
@@ -361,171 +337,122 @@ export async function saveCorrectionToDB(filePath, jsonObj) {
 
 // ---- Versioned transcripts (optional, if table exists) ------------
 export async function getLatestTranscript(filePath) {
-  if (!supa) return null;
-  try {
-    const { data, error } = await supa
-      .from('transcripts')
-      .select('version, base_sha256, text, words')
-      .eq('file_path', filePath)
-      .order('version', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (error) throw error;
-    return data || null;
-  } catch (e) {
-    console.warn('getLatestTranscript failed:', e.message || e);
-    return null;
-  }
+  const base = getBackendBase();
+  if (!base) return null;
+  const r = await fetch(`${base}/transcripts/latest?doc=${encodeURIComponent(filePath)}`);
+  if (!r.ok) return null;
+  return await r.json();
 }
 
 /** Fetch a specific transcript version (text + words) */
 export async function getTranscriptVersion(filePath, version) {
-  if (!supa) return null;
-  if (!filePath || !Number.isFinite(+version)) return null;
-  try {
-    const { data, error } = await supa
-      .from('transcripts')
-      .select('version, base_sha256, text, words')
-      .eq('file_path', filePath)
-      .eq('version', +version)
-      .maybeSingle();
-    if (error) throw error;
-    return data || null;
-  } catch (e) {
-    console.warn('getTranscriptVersion failed:', e.message || e);
-    return null;
-  }
+  const base = getBackendBase();
+  if (!base || !filePath || !Number.isFinite(+version)) return null;
+  const r = await fetch(`${base}/transcripts/get?doc=${encodeURIComponent(filePath)}&version=${encodeURIComponent(version)}`);
+  if (!r.ok) return null;
+  return await r.json();
 }
 
-export async function saveTranscriptVersion(filePath, { parentVersion = null, text, words }) {
-  if (!supa) throw new Error('Supabase client not configured');
-  const base_sha256 = await sha256Hex(text || '');
-  let version = 1;
-  try {
-    if (parentVersion == null) {
-      const latest = await getLatestTranscript(filePath);
-      version = latest ? (latest.version + 1) : 1;
-    } else {
-      version = Math.max(1, (+parentVersion || 0) + 1);
+/** Prefer normalized words from backend table; fallback to JSON words in transcript */
+export async function getTranscriptWords(filePath, version, opts = {}) {
+  const base = getBackendBase();
+  if (!base || !filePath || !Number.isFinite(+version)) return [];
+  const qp = new URLSearchParams({ doc: filePath, version: String(version) });
+  if (Number.isFinite(+opts.segment)) qp.set('segment', String(+opts.segment));
+  if (Number.isFinite(+opts.count)) qp.set('count', String(+opts.count));
+  const r = await fetch(`${base}/transcripts/words?${qp.toString()}`);
+  if (!r.ok) return [];
+  return await r.json();
+}
+
+export async function saveTranscriptVersion(filePath, { parentVersion = null, text, words, expectedBaseSha256 = '' }) {
+  const base = getBackendBase();
+  if (!base) throw new Error('Backend base not configured');
+  const payload = {
+    doc: filePath,
+    parentVersion: parentVersion,
+    expected_base_sha256: expectedBaseSha256 || '',
+    text: String(text || ''),
+    words: Array.isArray(words) ? words : []
+  };
+  const r = await fetch(`${base}/transcripts/save`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+  });
+  if (!r.ok) {
+    if (r.status === 409) {
+      let payload = null; try { payload = await r.json(); } catch {}
+      const err = new Error('Conflict'); err.code = 409; err.payload = payload; throw err;
     }
-    const row = { file_path: filePath, version, base_sha256, text: String(text||''), words: Array.isArray(words)? words: [] };
-    const { data, error } = await supa
-      .from('transcripts')
-      .insert(row)
-      .select('version, base_sha256')
-      .single();
-    if (error) throw error;
-    return data;
-  } catch (e) {
-    console.error('saveTranscriptVersion failed:', e.message || e);
-    throw e;
+    throw new Error(await r.text().catch(()=> 'save failed'));
   }
+  return await r.json();
 }
 
 /** Fetch transcript edits (diff layers) for a file */
-export async function getTranscriptEdits(filePath) {
-  if (!supa) return [];
-  try {
-    const { data, error } = await supa
-      .from('transcript_edits')
-      .select('parent_version, child_version, dmp_patch, token_ops')
-      .eq('file_path', filePath)
-      .order('child_version', { ascending: true });
-    if (error) throw error;
-    return Array.isArray(data) ? data : [];
-  } catch (e) {
-    console.warn('getTranscriptEdits failed:', e?.message || e);
-    return [];
-  }
-}
+export async function getTranscriptEdits(filePath) { return []; }
 
-/** Fetch all transcript versions (for fallback diff layers) */
+/** Fetch all transcript versions with text (ASC) for diff layers */
 export async function getAllTranscripts(filePath) {
-  if (!supa) return [];
+  const out = [];
   try {
-    const { data, error } = await supa
-      .from('transcripts')
-      .select('version, text')
-      .eq('file_path', filePath)
-      .order('version', { ascending: true });
-    if (error) throw error;
-    return Array.isArray(data) ? data : [];
-  } catch (e) {
-    console.warn('getAllTranscripts failed:', e?.message || e);
-    return [];
-  }
+    const base = getBackendBase();
+    if (!base || !filePath) return out;
+    const h = await fetch(`${base}/transcripts/history?doc=${encodeURIComponent(filePath)}`);
+    if (!h.ok) return out;
+    const hist = await h.json();
+    const versions = Array.isArray(hist) ? hist.map(r => +r.version).filter(v => Number.isFinite(v) && v > 0) : [];
+    versions.sort((a,b) => a - b);
+    if (!versions.length) return out;
+    for (const v of versions) {
+      try {
+        const row = await getTranscriptVersion(filePath, v);
+        if (row && typeof row.text === 'string') out.push({ version: v, text: row.text });
+      } catch {}
+    }
+    // Fallback if texts failed: try at least v1 and latest
+    if (!out.length && versions.length) {
+      try {
+        const v1 = await getTranscriptVersion(filePath, 1);
+        const latestV = versions[versions.length - 1];
+        const vl = await getTranscriptVersion(filePath, latestV);
+        if (v1 && typeof v1.text === 'string') out.push({ version: 1, text: v1.text });
+        if (vl && typeof vl.text === 'string') out.push({ version: latestV, text: vl.text });
+        out.sort((a,b) => a.version - b.version);
+      } catch {}
+    }
+  } catch {}
+  return out;
 }
 // ---- Edits history (optional) -------------------------------------
-export async function saveTranscriptEdit(filePath, parentVersion, childVersion, dmp_patch, token_ops) {
-  if (!supa) return null;
-  try {
-    const payload = {
-      file_path: filePath,
-      parent_version: +parentVersion || 0,
-      child_version: +childVersion || 0,
-      dmp_patch: String(dmp_patch || ''),
-      token_ops: token_ops != null ? token_ops : null
-    };
-    const { data, error } = await supa
-      .from('transcript_edits')
-      .insert(payload)
-      .select('id')
-      .single();
-    if (error) throw error;
-    return data;
-  } catch (e) {
-    console.warn('saveTranscriptEdit failed (optional):', e.message || e);
-    return null;
-  }
-}
+export async function saveTranscriptEdit() { return null; }
 
 // ---- Confirmations (anchored to version + hash) --------------------
 export async function getConfirmations(filePath, version) {
-  if (!supa || !filePath || !Number.isFinite(+version)) return [];
-  try {
-    const { data, error } = await supa
-      .from('transcript_confirmations')
-      .select('id, start_offset, end_offset, prefix, exact, suffix')
-      .eq('file_path', filePath)
-      .eq('version', +version)
-      .order('start_offset', { ascending: true });
-    if (error) throw error;
-    return (data || []).map(r => ({ id: r.id, range: [r.start_offset, r.end_offset], prefix: r.prefix, exact: r.exact, suffix: r.suffix }));
-  } catch (e) {
-    console.warn('getConfirmations failed:', e.message || e);
-    return [];
-  }
+  const base = getBackendBase();
+  if (!base || !filePath || !Number.isFinite(+version)) return [];
+  const r = await fetch(`${base}/transcripts/confirmations?doc=${encodeURIComponent(filePath)}&version=${encodeURIComponent(version)}`);
+  if (!r.ok) return [];
+  const arr = await r.json();
+  return (arr || []).map(r => ({ id: r.id, range: [r.start_offset, r.end_offset], prefix: r.prefix, exact: r.exact, suffix: r.suffix }));
 }
 
 export async function saveConfirmations(filePath, version, base_sha256, ranges, fullText) {
-  if (!supa) throw new Error('Supabase client not configured');
+  const base = getBackendBase();
+  if (!base) throw new Error('Backend base not configured');
   if (!filePath || !Number.isFinite(+version)) throw new Error('invalid version');
   const text = String(fullText || '');
   const mkCtx = (s, e) => {
     const preStart = Math.max(0, s - 16);
     const sufEnd = Math.max(e, Math.min(text.length, e + 16));
-    return {
-      start_offset: s,
-      end_offset: e,
-      prefix: text.slice(preStart, s),
-      exact: text.slice(s, e),
-      suffix: text.slice(e, sufEnd)
-    };
+    return { start_offset: s, end_offset: e, prefix: text.slice(preStart, s), exact: text.slice(s, e), suffix: text.slice(e, sufEnd) };
   };
-  const rows = (ranges || []).map(r => mkCtx(r[0], r[1]));
-  try {
-    // Strategy: clear and re-insert for simplicity
-    await supa.from('transcript_confirmations').delete().eq('file_path', filePath).eq('version', +version);
-    if (rows.length) {
-      const payload = rows.map(x => ({ file_path: filePath, version: +version, base_sha256: base_sha256 || '', ...x }));
-      const { error } = await supa.from('transcript_confirmations').insert(payload);
-      if (error) throw error;
-    }
-    return { count: rows.length };
-  } catch (e) {
-    console.error('saveConfirmations failed:', e.message || e);
-    throw e;
-  }
+  const items = (ranges || []).map(r => mkCtx(r[0], r[1]));
+  const r = await fetch(`${base}/transcripts/confirmations/save`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ doc: filePath, version: +version, base_sha256: base_sha256 || '', items })
+  });
+  if (!r.ok) throw new Error(await r.text().catch(()=> 'save failed'));
+  return await r.json();
 }
 
 // ---- Public: load one episode (baseline + initial tokens + audio) ----
@@ -556,65 +483,68 @@ export async function loadEpisode({ folder, file }) {
     console.warn('Latest transcript lookup error:', e);
   }
 
-  // 1b) If no versioned transcript, try old-style correction JSON
-  let correction = null;
-  if (!latestVersion) {
-    try {
-      correction = await loadCorrectionFromDB(audioPath);
-    } catch (e) {
-      console.warn('Corrections lookup error:', e);
+  // No legacy corrections fallback; backend is the source of truth.
+
+  // 2) Prefer backend baseline transcript if available
+  let baselineTokens = [];
+  let baselineText = '';
+  let audioUrl = '';
+  {
+    const base = getBackendBase();
+    const primaryUrl = base
+      ? `${base}/episode?folder=${encodeURIComponent(folder)}&file=${encodeURIComponent(file)}`
+      : `/episode?folder=${encodeURIComponent(folder)}&file=${encodeURIComponent(file)}`;
+    const fallbacks = [primaryUrl];
+    if (!base || !/^https?:\/\//i.test(base)) fallbacks.push(`http://localhost:5000/episode?folder=${encodeURIComponent(folder)}&file=${encodeURIComponent(file)}`);
+    let r;
+    for (const url of fallbacks) {
+      try {
+        r = await fetch(url, url.startsWith('http') ? undefined : { credentials: 'include' });
+        if (r.ok) {
+          if (url.startsWith('http')) setRuntimeBase(new URL(url).origin);
+          else if (typeof location !== 'undefined' && /^https?:$/.test(location.protocol)) setRuntimeBase(location.origin);
+          const j = await r.json();
+          const trRaw = j && (j.transcript || j.baseline || null);
+          if (trRaw) {
+            const norm = normalizeTranscript(trRaw);
+            baselineTokens = flattenToTokens(norm);
+            baselineText = wordsToText(baselineTokens);
+            // Force playback through backend /audio to ensure CORS/Range/auth handled
+            const enc = (s) => String(s || '').split('/').map(encodeURIComponent).join('/');
+            const origin = getBackendBase();
+            audioUrl = (origin ? `${origin}` : '') + `/audio/${enc(folder)}/${enc(file)}`;
+          }
+          break;
+        }
+      } catch {}
     }
   }
 
-  // 2) Always fetch HF baseline transcript (for diff/align baseline)
-  const transcriptUrl = transUrl(trPath);
-  const trResp = await fetchHF(transcriptUrl);
-  if (trResp.status === 401 && !getHFToken()) {
-    throw new Error('401: נדרש טוקן Hugging Face כדי לטעון את התמליל');
-  }
-  if (!trResp.ok) {
-    throw new Error(`שגיאת רשת (${trResp.status}) בעת טעינת תמליל`);
-  }
-  const trText = await decodeMaybeGzip(trResp, transcriptUrl);
-  const hfRaw = JSON.parse(trText);
-  const hfNorm = normalizeTranscript(hfRaw);
-  const baselineTokens = flattenToTokens(hfNorm);
-  const baselineText = wordsToText(baselineTokens);
+  // No HF fallback; baseline must come from backend.
 
   // 3) Choose initial tokens (latest transcript > correction > baseline)
   let initialTokens, usedCorrection = false, version = null, base_sha256 = '';
-  if (latestVersion && Array.isArray(latestVersion.words)) {
-    initialTokens = latestVersion.words;
+  if (latestVersion) {
     version = latestVersion.version;
     base_sha256 = latestVersion.base_sha256 || '';
-    usedCorrection = true;
-  } else if (correction) {
-    const corrNorm = normalizeTranscript(correction);
-    initialTokens = flattenToTokens(corrNorm);
-    usedCorrection = true;
+    // Prefer normalized words when backend is available
+    try {
+      const words = await getTranscriptWords(audioPath, version);
+      if (Array.isArray(words) && words.length) {
+        initialTokens = words;
+        usedCorrection = true;
+      }
+    } catch {}
+    if (!initialTokens && Array.isArray(latestVersion.words)) {
+      initialTokens = latestVersion.words; usedCorrection = true;
+    }
   } else {
     initialTokens = baselineTokens;
     usedCorrection = false;
   }
 
-  // 4) Audio URL (token-aware). If token present → fetch blob for auth-gated access.
-  const audioHF = opusUrl(audioPath);
-  let audioUrl = audioHF;
-  try {
-    const tok = getHFToken();
-    const needsAuth = !!tok;
-    if (needsAuth) {
-      const r = await fetchHF(audioHF);
-      if (r.status === 401) throw new Error('401: נדרש טוקן Hugging Face כדי לטעון אודיו');
-      if (r.ok) {
-        const b = await r.blob();
-        audioUrl = URL.createObjectURL(b);
-      }
-    }
-  } catch (e) {
-    console.warn('Audio fetch (authorized) failed, falling back to direct URL:', e);
-    // keep direct URL — may still work if public
-  }
+  // 4) Audio URL
+  // Audio URL is provided by backend (local or remote URL); no HF handling here.
 
   return {
     audioUrl,
@@ -629,17 +559,27 @@ export async function loadEpisode({ folder, file }) {
 
 // Named export bundle (matches earlier import style: `import { api } from ...`)
 export const api = {
-  configureSupabase,
   loadEpisode,
   getLatestTranscript,
   getTranscriptVersion,
+  getTranscriptWords,
+  // getTranscriptHistory: optional helper for history panel
+  async getTranscriptHistory(filePath) {
+    const base = getBackendBase();
+    if (base) {
+      try {
+        const r = await fetch(`${base}/transcripts/history?doc=${encodeURIComponent(filePath)}`);
+        if (r.ok) return await r.json();
+      } catch {}
+    }
+    return [];
+  },
   saveTranscriptVersion,
   getTranscriptEdits,
   getAllTranscripts,
   saveTranscriptEdit,
   getConfirmations,
   saveConfirmations,
-  saveCorrectionToDB,
   listFolders,
   listFiles,
   hasCorrection,

@@ -53,20 +53,38 @@
 
   <!-- Main 3-column panel with resizable gutters -->
   <main id="panel">
+    
+
     <!-- Browser (folders/files) -->
     <section class="card" id="browserCard" aria-labelledby="browserCardTitle">
       <div class="head">
-        <h2 id="browserCardTitle">דפדוף בקבצים</h2>
+        <div class="tabs" role="tablist" aria-label="nav">
+          <button id="tabBrowser" class="tab-btn" role="tab" aria-selected="true" aria-controls="panelBrowser">דפדוף</button>
+          <button id="tabSearch" class="tab-btn" role="tab" aria-selected="false" aria-controls="panelSearch">חיפוש</button>
+        </div>
       </div>
 
       <div class="body">
-        <div id="browserGrid" class="grid">
-          <div class="list" id="folders" aria-label="תיקיות"></div>
-          <div class="list" id="files" aria-label="קבצים"></div>
+        <div id="panelBrowser" class="tab-panel" role="tabpanel" aria-labelledby="tabBrowser">
+          <div id="browserGrid" class="grid">
+            <div class="list" id="folders" aria-label="תיקיות"></div>
+            <div class="list" id="files" aria-label="קבצים"></div>
+          </div>
+        </div>
+        <div id="panelSearch" class="tab-panel" role="tabpanel" aria-labelledby="tabSearch" hidden>
+          <div class="actions" role="group" aria-label="חיפוש">
+            <input id="searchInput" type="search" placeholder="חפש..." aria-label="חיפוש" />
+            <button id="searchBtn" class="pill" type="button">חפש</button>
+          </div>
+          <div id="searchResults" class="list" aria-label="תוצאות חיפוש" style="margin-top:8px;"></div>
+          <div class="pager" id="searchPager" role="navigation" aria-label="ניווט תוצאות" style="margin-top:8px;display:flex;gap:8px;">
+            <button id="searchPrev" class="pill" type="button">קודם</button>
+            <span id="searchPageInfo" class="hint"></span>
+            <button id="searchNext" class="pill" type="button">הבא</button>
+          </div>
         </div>
       </div>
     </section>
-
     <!-- Gutter between browser & transcript -->
     <div id="gutterR" class="gutter" role="separator" aria-orientation="vertical" tabindex="0"
       aria-label="שינוי רוחב הדפדפן"></div>
@@ -97,8 +115,10 @@
     <div id="gutterL" class="gutter" role="separator" aria-orientation="vertical" tabindex="0"
       aria-label="שינוי רוחב אזור ההשוואה"></div>
 
-    <!-- Diff viewer -->
-    <section class="card" id="diffCard" aria-labelledby="diffCardTitle">
+    
+
+  <!-- Diff viewer -->
+  <section class="card" id="diffCard" aria-labelledby="diffCardTitle">
       <div class="head">
         <h2 id="diffCardTitle">השוואת שינויים לדאטה סט</h2>
         <div class="actions" role="group" aria-label="פקדי השוואה">
@@ -108,7 +128,10 @@
       <div class="body">
         <div id="diffBody" dir="auto" aria-live="polite" aria-label="תצוגת השוואות"></div>
       </div>
-    </section>
+  </section>
+
+  <!-- History sidebar -->
+  
   </main>
 
   <!-- Back-to-top floating button -->
@@ -120,20 +143,44 @@
   <!-- Dev metrics HUD (toggle with Ctrl+Alt+D) -->
   <div id="hud" class="hud" aria-hidden="true" style="display:none"></div>
 
-  <!-- Settings modal -->
+  <!-- Settings modal (placeholder) -->
   <div id="modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
     <div class="modal-content" role="document">
       <header class="modal-head">
         <h3 id="settingsTitle">הגדרות</h3>
       </header>
       <div class="modal-body">
-        <label for="hfToken">Hugging Face Token</label>
-        <input id="hfToken" type="password" autocomplete="off" />
+        <p style="margin:0">אין הגדרות נוספות בשלב זה.</p>
       </div>
       <footer class="modal-foot">
-        <button id="mSave" class="pill" type="button">שמור</button>
-        <button id="mClear" class="pill" type="button">נקה</button>
         <button id="mClose" class="pill" type="button">סגור</button>
+      </footer>
+    </div>
+  </div>
+
+  <!-- Merge conflict modal -->
+  <div id="mergeModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="mergeTitle">
+    <div class="modal-content" role="document">
+      <header class="modal-head">
+        <h3 id="mergeTitle">התנגשות גרסאות</h3>
+      </header>
+      <div class="modal-body" style="max-height:50vh; overflow:auto;">
+        <p>נמצאה התנגשות בשמירה. להלן ההבדלים:</p>
+        <div class="grid" style="grid-template-columns:1fr 1fr; gap:8px;">
+          <div>
+            <h4 style="margin-top:0">בסיס → העדכנית</h4>
+            <pre id="diffParentLatest" style="white-space:pre-wrap; background:var(--bg-2); padding:8px; border-radius:6px;"></pre>
+          </div>
+          <div>
+            <h4 style="margin-top:0">בסיס → השינויים שלי</h4>
+            <pre id="diffParentClient" style="white-space:pre-wrap; background:var(--bg-2); padding:8px; border-radius:6px;"></pre>
+          </div>
+        </div>
+      </div>
+      <footer class="modal-foot">
+        <button id="mergeReload" class="pill" type="button">טען העדכנית</button>
+        <button id="mergeTry" class="pill" type="button">מיזוג אוטומטי (בטא)</button>
+        <button id="mergeClose" class="pill" type="button">סגור</button>
       </footer>
     </div>
   </div>
@@ -146,3 +193,8 @@
 </body>
 
 </html>
+
+
+
+
+

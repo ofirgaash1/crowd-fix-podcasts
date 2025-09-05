@@ -3,9 +3,9 @@ import { store, getState } from '../core/state.js';
 import { showToast } from './toast.js';
 import { canonicalizeText } from '../shared/canonical.js';
 import { verifyChainHash } from '../history/verify-chain.js';
-import { saveTranscriptVersion, saveTranscriptEdit, saveCorrectionToDB, markCorrection, getLatestTranscript, getTranscriptVersion, saveConfirmations, sha256Hex } from '../data/api.js';
+import { saveTranscriptVersion, markCorrection, getLatestTranscript, getTranscriptVersion, getTranscriptWords, saveConfirmations, sha256Hex } from '../data/api.js';
 
-export function setupUIControls(els, { workers }, virtualizer, playerCtrl, isIdle) {
+export function setupUIControls(els, { workers, mergeModal }, virtualizer, playerCtrl, isIdle) {
   // Probability highlight toggle
   if (els.probToggle) {
     const LS_KEY = 'probHL';
@@ -175,7 +175,18 @@ export function setupUIControls(els, { workers }, virtualizer, playerCtrl, isIdl
         showToast('אין שינוי לשמירה', 'info');
         return;
       }
-      const res = await saveTranscriptVersion(filePath, { parentVersion: parentVersionGuess, text, words: tokens });
+      // Provide expectedBaseSha256 for authoritative hash-gate on backend: hash of parent text
+      const expectedBaseSha256 = (latest?.text != null) ? await sha256Hex(String(latest.text)) : '';
+      // Align words before saving to ensure precise timings
+      let wordsForSave = tokens;
+      try {
+        const st0 = getState();
+        const baseTokens = st0?.baselineTokens || [];
+        const ar = await workers.align.send(baseTokens, text);
+        const toks = Array.isArray(ar?.tokens) ? ar.tokens : [];
+        if (toks.length) wordsForSave = toks;
+      } catch {}
+      const res = await saveTranscriptVersion(filePath, { parentVersion: parentVersionGuess, text, words: wordsForSave, expectedBaseSha256 });
       const childV = res?.version; const parentV = (typeof childV === 'number' && childV > 1) ? (childV - 1) : null;
       store.setState({ version: childV || 0, base_sha256: res?.base_sha256 || st.base_sha256 || '' }, 'version:saved');
       try {
@@ -185,9 +196,9 @@ export function setupUIControls(els, { workers }, virtualizer, playerCtrl, isIdl
           try { parent = await getTranscriptVersion(filePath, parentV); } catch {}
           const parentText = canonicalizeText(parent?.text || parentTextSnapshot || '');
           if (parentText) {
-            const { diffs } = await workers.diff.send(parentText, text, { timeoutSec: 0.8, editCost: 8 });
-            const patchJson = JSON.stringify(diffs || []);
-            await saveTranscriptEdit(filePath, parentV, childV, patchJson, patchJson);
+          // Optional: save edit ops history via backend if available (handled server-side on save)
+          const { diffs } = await workers.diff.send(parentText, text, { timeoutSec: 0.8, editCost: 8 });
+          // Server already records deltas; client-side persistence optional and omitted.
           }
         }
       } catch (eHist) {
@@ -215,19 +226,162 @@ export function setupUIControls(els, { workers }, virtualizer, playerCtrl, isIdl
             const got = (vRes.got || '').slice(0, 8);
             const exp = (vRes.expected || '').slice(0, 8);
             showToast(`אי-תאמה בגיבוב: ${got} ≠ ${exp}`, 'error');
+            try {
+              const { renderHashMismatch } = await import("./merge-modal.js");
+              renderHashMismatch(els, { expected: vRes.expected, got: vRes.got, reason: vRes.reason, at: vRes.at, tip: "בדוק אם נשמרה גרסה חדשה במקביל (מזג/טען מחדש)." });
+              mergeModal?.open?.();
+            } catch {}
           }
         }
       } catch (e) {
         console.warn('verifyChainHash failed:', e);
       }
     } catch (e1) {
-      console.warn('Versioned save failed, falling back to correction JSON:', e1);
-      const segs = buildSegmentsFromTokens(tokens).map(s => ({ start: s.start, end: s.end, text: s.text, words: s.words })); const json = { text: segs.map(s=>s.text).join('\n'), segments: segs };
-      const res2 = await saveCorrectionToDB(filePath, json); console.log('Correction saved (legacy):', res2);
-      showToast('התיקון נשמר בהצלחה (legacy)', 'success');
+      // Conflict-aware handling: if backend responded with 409, open merge dialog
+      if (e1 && e1.code === 409 && e1.payload) {
+        try {
+          const payload = e1.payload;
+          // Render dialog
+          const { renderConflict } = await import('./merge-modal.js');
+          renderConflict(els, payload);
+          mergeModal?.open();
+          // Wire actions
+          const reload = async () => {
+            try {
+              const latest = await getLatestTranscript(filePath);
+              if (!latest) return;
+              const words = await getTranscriptWords(filePath, latest.version);
+              const toks = Array.isArray(words) && words.length ? words : tokens;
+              store.setTokens(toks);
+              store.setLiveText((toks || []).map(t => t.word || '').join(''));
+              store.setState({ version: latest.version || 0, base_sha256: latest.base_sha256 || '' }, 'version:saved');
+              showToast('נטענה הגרסה העדכנית', 'info');
+            } catch (e) { console.warn('reload latest failed:', e); }
+            mergeModal?.close();
+          };
+          const tryMerge = async () => {
+            try {
+              const baseText = canonicalizeText(payload?.parent?.text || '');
+              const latestText = canonicalizeText(payload?.latest?.text || '');
+              const clientText = text; // already canonicalized above
+
+              // compute diffs base->latest and base->client using worker
+              const [d1, d2] = await Promise.all([
+                workers.diff.send(baseText, latestText, { editCost: 8, timeoutSec: 0.8 }),
+                workers.diff.send(baseText, clientText, { editCost: 8, timeoutSec: 0.8 })
+              ]);
+              const diffsA = Array.isArray(d1?.diffs) ? d1.diffs : [];
+              const diffsB = Array.isArray(d2?.diffs) ? d2.diffs : [];
+
+              function toEdits(base, diffs) {
+                const edits = [];
+                let pos = 0;
+                let pendingDelStart = null; let pendingDelLen = 0;
+                for (const [op, str] of diffs) {
+                  const s = String(str||'');
+                  if (op === 0) { // equal
+                    if (pendingDelStart != null) {
+                      // deletion with no insertion becomes replacement with empty
+                      edits.push({ start: pendingDelStart, end: pendingDelStart + pendingDelLen, ins: '' });
+                      pendingDelStart = null; pendingDelLen = 0;
+                    }
+                    pos += s.length;
+                  } else if (op === -1) { // delete
+                    if (pendingDelStart == null) { pendingDelStart = pos; pendingDelLen = 0; }
+                    pendingDelLen += s.length; pos += s.length;
+                  } else if (op === 1) { // insert
+                    if (pendingDelStart != null) {
+                      edits.push({ start: pendingDelStart, end: pendingDelStart + pendingDelLen, ins: s });
+                      pendingDelStart = null; pendingDelLen = 0;
+                    } else {
+                      edits.push({ start: pos, end: pos, ins: s });
+                    }
+                  }
+                }
+                if (pendingDelStart != null) {
+                  edits.push({ start: pendingDelStart, end: pendingDelStart + pendingDelLen, ins: '' });
+                }
+                return edits;
+              }
+
+              function overlaps(a, b) {
+                // insertion (start==end) conflicts if inside other's replacement range
+                const aIns = (a.start === a.end); const bIns = (b.start === b.end);
+                if (aIns && bIns) return a.start === b.start; // both insert at same point => conflict
+                if (aIns) return (a.start >= b.start && a.start < b.end);
+                if (bIns) return (b.start >= a.start && b.start < a.end);
+                return a.start < b.end && b.start < a.end;
+              }
+
+              const editsLatest = toEdits(baseText, diffsA);
+              const editsMine   = toEdits(baseText, diffsB);
+
+              // detect overlap
+              for (const e1 of editsLatest) {
+                for (const e2 of editsMine) {
+                  if (overlaps(e1, e2)) {
+                    showToast('יש התנגשויות חופפות – מיזוג אוטומטי נכשל', 'error');
+                    return; // leave modal open
+                  }
+                }
+              }
+
+              // combine and apply to base from right to left
+              const combined = editsLatest.concat(editsMine).sort((a,b) => b.start - a.start || b.end - a.end);
+              let merged = baseText;
+              for (const e of combined) {
+                merged = merged.slice(0, e.start) + e.ins + merged.slice(e.end);
+              }
+
+              // Align merged text to tokens using baseline
+              let tokensMerged = null;
+              try {
+                const st0 = getState();
+                const baseTokens = st0?.baselineTokens || [];
+                const alignRes = await workers.align.send(baseTokens, merged);
+                const toks = Array.isArray(alignRes?.tokens) ? alignRes.tokens : [];
+                if (toks.length) tokensMerged = toks;
+              } catch {}
+              if (!tokensMerged) {
+                // Fallback: reconstruct minimal tokens
+                tokensMerged = buildSegmentsFromTokens(tokens).length ? tokens : [{ word: merged, start: 0, end: 0 }];
+              }
+
+              // Try saving merged result against latest
+              const latest = payload.latest;
+              const expected = await sha256Hex(canonicalizeText(latest?.text || ''));
+              const saveRes = await saveTranscriptVersion(filePath, { parentVersion: latest?.version ?? null, text: merged, words: tokensMerged, expectedBaseSha256: expected });
+
+              // Update UI with merged saved
+              store.setTokens(tokensMerged);
+              store.setLiveText(merged);
+              store.setState({ version: saveRes?.version || 0, base_sha256: saveRes?.base_sha256 || '' }, 'version:saved');
+              showToast('מיזוג אוטומטי הצליח ונשמר', 'success');
+              mergeModal?.close();
+            } catch (err) {
+              console.warn('Auto-merge failed:', err);
+              showToast('מיזוג אוטומטי נכשל', 'error');
+            }
+          };
+          if (els.mergeReload) {
+            els.mergeReload.onclick = reload;
+          }
+          if (els.mergeTry) {
+            els.mergeTry.onclick = tryMerge;
+          }
+          return; // don't fall back to legacy in conflict case
+        } catch (e) {
+          console.warn('Conflict dialog failed:', e);
+        }
+      }
+      console.warn('Versioned save failed:', e1);
+      showToast('שמירה נכשלה', 'error');
     } finally { saving = false; saveQueued = false; setSaveButton('idle'); try { markCorrection(filePath); } catch {}; try { const fileItem = els.files?.querySelector(`[data-file="${file}"]`); if (fileItem) { fileItem.classList.add('has-correction'); fileItem.classList.remove('no-correction'); } } catch {} }
   }
   function checkQueuedSave() { if (saveQueued && isIdle() && !saving) performSave(); }
   setInterval(checkQueuedSave, 200);
   if (els.submitBtn) els.submitBtn.addEventListener('click', async () => { if (!isIdle()) { saveQueued = true; setSaveButton('waiting'); showToast('השינויים טרם נשמרו - אנא המתן לסיום עיבוד', 'info'); return; } await performSave(); });
 }
+
+
+
