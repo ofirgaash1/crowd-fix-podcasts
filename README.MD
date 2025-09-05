@@ -64,6 +64,52 @@ The goal: one cohesive tool for managing, editing, and aligning long-form transc
 
 ---
 
+## How To Run
+
+Quickstart for local development with the Explore backend and V2 frontend.
+
+1) Prerequisites
+- Python 3.10+ (with `pip`)
+- Modern browser (Chrome/Edge/Firefox)
+
+2) Install backend dependencies
+```bash
+# From repo root
+python -m venv .venv
+# Activate:
+#  - macOS/Linux:   source .venv/bin/activate
+#  - Windows (PS):  .venv\\Scripts\\Activate.ps1
+pip install -r explore/requirements.txt
+```
+
+3) Prepare data directories
+- Create a data root with the following layout:
+```
+<data_root>/audio/<folder>/<file>.opus
+<data_root>/json/<folder>/<file_stem>/full_transcript.json.gz
+```
+
+4) Run the backend (dev mode)
+```bash
+python explore/run.py --data-dir <data_root> --dev
+```
+- Verifications:
+  - http://localhost:5000/folders
+  - http://localhost:5000/files?folder=<folder>
+  - http://localhost:5000/episode?folder=<folder>&file=<file>.opus
+
+5) Open the frontend
+- Easiest: open `v2/index.html` directly in your browser.
+  - When opened via `file://`, the app uses `http://localhost:5000` automatically for API calls.
+- Or serve statically and set in console: `window.EXPLORE_API_BASE = 'http://localhost:5000'`.
+
+Notes
+- The backend stores its SQLite database at `<data_root>/explore.sqlite`.
+- In dev mode, authentication is bypassed via `TS_USER_EMAIL`; see `explore/run.py`.
+- If you rely on Hugging Face fallbacks (folders/files/audio), add your HF token via the settings ⚙️ button.
+
+---
+
 ## Current Database Schema
 
 From `explore-index.db`:
