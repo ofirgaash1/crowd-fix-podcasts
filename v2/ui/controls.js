@@ -177,7 +177,16 @@ export function setupUIControls(els, { workers, mergeModal }, virtualizer, playe
       }
       // Provide expectedBaseSha256 for authoritative hash-gate on backend: hash of parent text
       const expectedBaseSha256 = parentTextSnapshot ? await sha256Hex(parentTextSnapshot) : '';
-      const res = await saveTranscriptVersion(filePath, { parentVersion: parentVersionGuess, text, words: tokens, expectedBaseSha256 });
+      // Align words before saving to ensure precise timings
+      let wordsForSave = tokens;
+      try {
+        const st0 = getState();
+        const baseTokens = st0?.baselineTokens || [];
+        const ar = await workers.align.send(baseTokens, text);
+        const toks = Array.isArray(ar?.tokens) ? ar.tokens : [];
+        if (toks.length) wordsForSave = toks;
+      } catch {}
+      const res = await saveTranscriptVersion(filePath, { parentVersion: parentVersionGuess, text, words: wordsForSave, expectedBaseSha256 });
       const childV = res?.version; const parentV = (typeof childV === 'number' && childV > 1) ? (childV - 1) : null;
       store.setState({ version: childV || 0, base_sha256: res?.base_sha256 || st.base_sha256 || '' }, 'version:saved');
       try {

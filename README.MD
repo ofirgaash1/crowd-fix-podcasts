@@ -246,5 +246,30 @@ Hash Gate Semantics
   - Conflict detection (hash + ancestor tracking), merge UI
 - Speaker diarization integration:
   - Store speaker turns; render with coloring and quick navigation
-- Words table migration:
+  - Words table migration:
   - Migrate from JSON words to normalized per‑word table with indexes
+
+---
+
+## Conflict Flow
+
+- Save path performs an optimistic `POST /transcripts/save` with `parentVersion` and `expected_base_sha256`.
+- On success → backend returns `{ version, base_sha256 }` and the editor updates state.
+- On conflict (HTTP 409): backend returns a JSON payload with:
+  - `latest`, `parent`, `diff_parent_to_latest`, `diff_parent_to_client`.
+  - UI opens a merge dialog:
+    - Attempts auto‑merge when edits are non‑overlapping (client + latest applied to base).
+    - If overlapping, keeps the dialog open for manual resolution (pick Latest or Mine; fine‑grained merge coming next).
+
+## Partial Words API and Virtualizer
+
+- `GET /transcripts/words?doc=…&version=…&segment=N[&count=K]` returns tokens for segments N..N+K‑1.
+- The frontend progressively loads words in chunks (e.g., 50 segments) to reduce initial load, feeding the virtualizer as data arrives.
+- Future: window‑aware fetching (±500 tokens) and eviction.
+
+## Alignment Roadmap
+
+- Current align worker computes token timings from baseline anchors and new text (LCS + anchor windows).
+- Next: plug in echogarden WASM for high‑quality alignment and confidence scores:
+  - On save, align only edited segments (±1 neighbor) and write to `transcript_words`.
+  - Use confidences for probability heatmap and confirmation hints.

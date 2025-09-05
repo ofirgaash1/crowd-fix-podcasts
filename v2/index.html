@@ -97,8 +97,8 @@
     <div id="gutterL" class="gutter" role="separator" aria-orientation="vertical" tabindex="0"
       aria-label="שינוי רוחב אזור ההשוואה"></div>
 
-    <!-- Diff viewer -->
-    <section class="card" id="diffCard" aria-labelledby="diffCardTitle">
+  <!-- Diff viewer -->
+  <section class="card" id="diffCard" aria-labelledby="diffCardTitle">
       <div class="head">
         <h2 id="diffCardTitle">השוואת שינויים לדאטה סט</h2>
         <div class="actions" role="group" aria-label="פקדי השוואה">
@@ -108,7 +108,17 @@
       <div class="body">
         <div id="diffBody" dir="auto" aria-live="polite" aria-label="תצוגת השוואות"></div>
       </div>
-    </section>
+  </section>
+
+  <!-- History sidebar -->
+  <section class="card" id="historyCard" aria-labelledby="historyCardTitle">
+    <div class="head">
+      <h2 id="historyCardTitle">היסטוריית גרסאות</h2>
+    </div>
+    <div class="body">
+      <div id="historyList" class="list" aria-label="היסטוריית גרסאות"></div>
+    </div>
+  </section>
   </main>
 
   <!-- Back-to-top floating button -->

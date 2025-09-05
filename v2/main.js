@@ -5,6 +5,7 @@ import { store, getState, makeThrottle } from './core/state.js';
 import { ScrollVirtualizer } from './render/virtualizer.js';
 import { setupPlayerSync } from './player/sync.js';
 import { setupBrowser } from './data/browser.js';
+import { setupWordsPager } from './data/words-pager.js';
 import { setupSupabase } from './data/supabase-init.js';
 import { setupShowLayers } from './history/show-layers.js';
 import { setupScrollSync, setupGutters } from './ui/layout.js';
@@ -14,6 +15,7 @@ import { setupThemeToggle } from './ui/theme.js';
 import { setupUIControls } from './ui/controls.js';
 import { setupMergeModal } from './ui/merge-modal.js';
 import { setupHud } from './ui/hud.js';
+import { setupHistoryPanel } from './history/panel.js';
 import { setupEditorPipeline as setupEditorPipelineMod, setShowingLayers as setLayersFlag, getTypingQuietUntil, setTypingQuiet as setTypingQuiet } from './editor/pipeline.js';
 import { initWorkers } from './workers/init.js';
 
@@ -200,6 +202,9 @@ setupThemeToggle(els);
 // Wire UI controls (rate, VTT, font, confirm, back-to-top)
 setupUIControls(els, { workers, mergeModal }, virtualizer, playerCtrl, isIdle);
 
+// History sidebar
+setupHistoryPanel(els, workers);
+
 // Gutters and scroll sync
 setupGutters(els);
 setupScrollSync(els);
@@ -237,3 +242,24 @@ if (els.transcript && els.player) {
 
 // Diff layers (show all dmp_patch rows)
 setupShowLayers(els, workers);
+
+// Words pager: progressively load words in segment chunks when backend is present
+(function initWordsPager(){
+  try {
+    const pager = setupWordsPager(els, virtualizer, { chunkSegs: 50 });
+    // Start/stop on doc change
+    const onDocChange = () => { try { pager.stop(); } catch {}; setTimeout(() => pager.start(), 50); };
+    // Mark doc changes when browser sets dataset
+    const mo = new MutationObserver((mut) => {
+      for (const m of mut) {
+        if (m.type === 'attributes' && m.attributeName === 'data-file') {
+          els.transcript?.dispatchEvent(new CustomEvent('v2:doc-change'));
+          onDocChange();
+        }
+      }
+    });
+    if (els.transcript) mo.observe(els.transcript, { attributes: true });
+    // Also start once after initial load
+    setTimeout(() => pager.start(), 500);
+  } catch {}
+})();
