@@ -4,3 +4,5 @@ audio
 app.log
 explore.sqlite
 explore.sqlite*
+explore.sqlite-shm
+explore.sqlite-wal
