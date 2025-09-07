@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Optional
 
 import orjson
-from flask import Blueprint, current_app, jsonify, request, abort
+from flask import Blueprint, current_app, jsonify, request, abort, session
 
 from ..services.db import DatabaseService
 
@@ -30,11 +30,17 @@ def _ensure_schema(db: DatabaseService):
             base_sha256 TEXT NOT NULL,
             text        TEXT NOT NULL,
             words       TEXT NOT NULL,
+            created_by  TEXT,
             created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (file_path, version)
         )
         """
     )
+    # Backfill created_by in existing DBs (best-effort)
+    try:
+        db.execute("ALTER TABLE transcripts ADD COLUMN created_by TEXT")
+    except Exception:
+        pass
     # Event-sourced deltas between versions
     db.execute(
         """
@@ -93,7 +99,7 @@ def _sha256_hex(s: str) -> str:
 
 def _latest_row(db: DatabaseService, file_path: str) -> Optional[dict]:
     cur = db.execute(
-        "SELECT version, base_sha256, text, words FROM transcripts WHERE file_path=? ORDER BY version DESC LIMIT 1",
+        "SELECT version, base_sha256, text, words, COALESCE(created_by,'') FROM transcripts WHERE file_path=? ORDER BY version DESC LIMIT 1",
         [file_path],
     )
     row = cur.fetchone()
@@ -104,12 +110,13 @@ def _latest_row(db: DatabaseService, file_path: str) -> Optional[dict]:
         "base_sha256": row[1],
         "text": row[2],
         "words": orjson.loads(row[3]) if row[3] else [],
+        "created_by": row[4] or "",
     }
 
 
 def _row_for_version(db: DatabaseService, file_path: str, version: int) -> Optional[dict]:
     cur = db.execute(
-        "SELECT version, base_sha256, text, words FROM transcripts WHERE file_path=? AND version=?",
+        "SELECT version, base_sha256, text, words, COALESCE(created_by,'') FROM transcripts WHERE file_path=? AND version=?",
         [file_path, int(version)],
     )
     row = cur.fetchone()
@@ -120,6 +127,7 @@ def _row_for_version(db: DatabaseService, file_path: str, version: int) -> Optio
         "base_sha256": row[1],
         "text": row[2],
         "words": orjson.loads(row[3]) if row[3] else [],
+        "created_by": row[4] or "",
     }
 
 
@@ -237,9 +245,10 @@ def save_version():
     # Begin transaction
     db.execute("BEGIN TRANSACTION")
     try:
+        user_email = session.get('user_email', '')
         db.execute(
-            "INSERT INTO transcripts (file_path, version, base_sha256, text, words) VALUES (?, ?, ?, ?, ?)",
-            [doc, new_version, new_hash, text, words_json]
+            "INSERT INTO transcripts (file_path, version, base_sha256, text, words, created_by) VALUES (?, ?, ?, ?, ?, ?)",
+            [doc, new_version, new_hash, text, words_json, user_email]
         )
         # Populate normalized words rows for this version
         _populate_transcript_words(db, doc, new_version, words)
@@ -282,7 +291,8 @@ def history():
         SELECT t.version,
                COALESCE(e.parent_version, NULL) AS parent_version,
                t.base_sha256,
-               t.created_at
+               t.created_at,
+               COALESCE(t.created_by,'')
         FROM transcripts t
         LEFT JOIN transcript_edits e
           ON e.file_path = t.file_path AND e.child_version = t.version AND e.parent_version = t.version - 1
@@ -293,7 +303,7 @@ def history():
     )
     rows = cur.fetchall() or []
     out = [
-        {"version": r[0], "parent_version": r[1], "hash": r[2], "created_at": r[3]} for r in rows
+        {"version": r[0], "parent_version": r[1], "hash": r[2], "created_at": r[3], "created_by": r[4]} for r in rows
     ]
     return jsonify(out)
 

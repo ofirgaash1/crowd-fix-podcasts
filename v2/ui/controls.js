@@ -5,7 +5,7 @@ import { canonicalizeText } from '../shared/canonical.js';
 import { verifyChainHash } from '../history/verify-chain.js';
 import { saveTranscriptVersion, markCorrection, getLatestTranscript, getTranscriptVersion, getTranscriptWords, saveConfirmations, sha256Hex } from '../data/api.js';
 
-export function setupUIControls(els, { workers, mergeModal }, virtualizer, playerCtrl, isIdle) {
+export function setupUIControls(els, { workers }, virtualizer, playerCtrl, isIdle) {
   // Probability highlight toggle
   if (els.probToggle) {
     const LS_KEY = 'probHL';
@@ -143,8 +143,27 @@ export function setupUIControls(els, { workers, mergeModal }, virtualizer, playe
     els.markReliable.style.display = inConfirmed ? 'none' : '';
     els.markUnreliable.style.display = inConfirmed ? '' : 'none';
   };
-  if (els.markReliable) els.markReliable.addEventListener('click', () => { mayConfirmNow().then(ok => { if (!ok) { showToast('שמור ואז אשר (hash mismatch)', 'error'); return; } const sel = selectionRange(); if (!sel || sel[0] === sel[1]) return; const conf = (getState().confirmedRanges || []).map(x=>x.range); const merged = mergeRanges(conf.concat([sel])); store.setConfirmedRanges(merged.map(r => ({ range: r }))); refreshConfirmButtons(); persistConfirmations(); }); });
-  if (els.markUnreliable) els.markUnreliable.addEventListener('click', () => { mayConfirmNow().then(ok => { if (!ok) { showToast('שמור ואז אשר (hash mismatch)', 'error'); return; } const sel = selectionRange(); if (!sel) return; const keep = (getState().confirmedRanges || []).map(x=>x.range).filter(r => !overlaps(r, sel)); store.setConfirmedRanges(keep.map(r => ({ range: r }))); refreshConfirmButtons(); persistConfirmations(); }); });
+  if (els.markReliable) els.markReliable.addEventListener('click', async () => {
+    let ok = await mayConfirmNow();
+    if (!ok) { try { await performSave(); ok = await mayConfirmNow(); } catch {} }
+    if (!ok) { showToast('לא ניתן לאשר (אי התאמת hash)', 'error'); return; }
+    const sel = selectionRange(); if (!sel || sel[0] === sel[1]) return;
+    const conf = (getState().confirmedRanges || []).map(x=>x.range);
+    const merged = mergeRanges(conf.concat([sel]));
+    store.setConfirmedRanges(merged.map(r => ({ range: r })));
+    refreshConfirmButtons();
+    await persistConfirmations();
+  });
+  if (els.markUnreliable) els.markUnreliable.addEventListener('click', async () => {
+    let ok = await mayConfirmNow();
+    if (!ok) { try { await performSave(); ok = await mayConfirmNow(); } catch {} }
+    if (!ok) { showToast('לא ניתן להסיר אישור (אי התאמת hash)', 'error'); return; }
+    const sel = selectionRange(); if (!sel) return;
+    const keep = (getState().confirmedRanges || []).map(x=>x.range).filter(r => !overlaps(r, sel));
+    store.setConfirmedRanges(keep.map(r => ({ range: r })));
+    refreshConfirmButtons();
+    await persistConfirmations();
+  });
   document.addEventListener('selectionchange', () => { const sel = window.getSelection(); if (!sel || sel.rangeCount === 0) return; const n = sel.getRangeAt(0).commonAncestorContainer; if (els.transcript === n || (n && els.transcript.contains(n))) refreshConfirmButtons(); });
   store.subscribe((_, tag) => { if (tag === 'confirmedRanges') refreshConfirmButtons(); });
 

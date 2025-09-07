@@ -118,12 +118,28 @@ Examples
 - Easiest: open `v2/index.html` directly in your browser.
   - When opened via `file://`, the app uses `http://localhost:5000` automatically for API calls.
 - Or serve statically and set in console: `window.EXPLORE_API_BASE = 'http://localhost:5000'`.
- - Or, now served by the backend: open `http://localhost:5000/v2`.
+- Or, served by the backend: open `http://localhost:5000/v2`.
 
 Notes
 - The backend stores its SQLite database at `<data_root>/explore.sqlite`.
 - In dev mode, authentication is bypassed via `TS_USER_EMAIL`; see `explore/run.py`.
 - The frontend uses only the Explore backend. If local audio is missing, the backend may return a remote audio URL.
+
+Auth & 401 handling
+- All frontend requests to the Explore backend include credentials (cookies).
+- If the server returns 401, the UI shows a toast “יש להתחבר” and redirects to `<EXPLORE_API_BASE>/login`.
+- For cross‑origin hosting, make sure the backend sets:
+  - `Access-Control-Allow-Credentials: true`
+  - `Access-Control-Allow-Origin: <exact frontend origin>` (not `*`).
+
+Baseline and diff layers
+- The “הצג שכבות שינויים” button shows every adjacent version pair.
+- The baseline is injected as version `v0`, so after your first save you’ll see `v0 → v1`.
+- Pairs with no changes are skipped from rendering.
+
+Confirmations flow
+- Confirming a selection requires the saved version hash to match.
+- If you try to confirm and the hash doesn’t match (unsaved edits), the app auto‑saves, rechecks, and then persists the confirmation.
 
 Frontend data sources
 - The frontend now uses the Explore backend exclusively for folders/files/episodes and transcripts. No Hugging Face/Supabase fallbacks.
@@ -281,10 +297,11 @@ SELECT * FROM segments WHERE doc_id=1 ORDER BY segment_id LIMIT 5;
   - `python explore/run.py --data-dir <data_root> --dev`
   - Verify: `http://localhost:5000/folders`, `/files?folder=...`, `/episode?folder=...&file=...`
 - Frontend (V2):
-  - Open `v2/index.html` directly (file://)
-  - Or serve statically and set `window.EXPLORE_API_BASE = 'http://localhost:5000'` in console
+  - Open `v2/index.html` directly (file://), or
+  - Serve statically and set `window.EXPLORE_API_BASE = 'http://localhost:5000'` in console, or
+  - Open `http://localhost:5000/v2` (served by Explore)
 
-With `EXPLORE_API_BASE` set, the frontend prefers Explore endpoints; otherwise it falls back to Hugging Face and Supabase.
+The frontend now uses only the Explore backend (no Hugging Face token or Supabase fallback).
 
 ## Data Model
 

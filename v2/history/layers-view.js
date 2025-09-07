@@ -26,6 +26,10 @@ export async function buildLayersHTML(filePath, versions, getDiff) {
     let diffs = [];
     try { diffs = await getDiff(aMid, bMid, { parentV, childV, aFull, bFull, aMid, bMid }); } catch { diffs = []; }
     const filtered = Array.isArray(diffs) ? diffs.filter(x => Array.isArray(x) && (x[0] === 1 || x[0] === -1)) : [];
+    try {
+      const childUser = versions[k]?.user || '';
+      if (childUser) { html += `<div class="hint" style="margin-inline-start:6px">מאת ${escapeHtml(childUser)}</div>`; }
+    } catch {}
     html += `<div class="layer"><div class="hint">— v${escapeHtml(parentV)} → v${escapeHtml(childV)}</div>`;
     const rowHtml = filtered.map(([op, text]) => {
       const safe = escapeHtml(text || '');
@@ -35,3 +39,5 @@ export async function buildLayersHTML(filePath, versions, getDiff) {
   }
   return html;
 }
+
+

@@ -356,6 +356,9 @@ header {
   background: rgba(62, 166, 255, .10);
 }
 .tab-panel[hidden] { display: none; }
+/* Ensure ID-specific panels hide even if they set display:flex elsewhere */
+#panelBrowser[hidden],
+#panelSearch[hidden] { display: none !important; }
 
 /* Gutters for resizing */
 .gutter {
@@ -712,13 +715,15 @@ header {
 
   /* WebKit */
   .card .body::-webkit-scrollbar,
-  #browserGrid .list::-webkit-scrollbar {
+  #browserGrid .list::-webkit-scrollbar,
+  #panelSearch .list::-webkit-scrollbar {
     width: 10px;
     height: 10px;
   }
 
   .card .body::-webkit-scrollbar-thumb,
-  #browserGrid .list::-webkit-scrollbar-thumb {
+  #browserGrid .list::-webkit-scrollbar-thumb,
+  #panelSearch .list::-webkit-scrollbar-thumb {
     background: rgba(128, 128, 128, .35);
     border-radius: 999px;
     border: 2px solid transparent;
@@ -726,10 +731,14 @@ header {
   }
 
   .card .body::-webkit-scrollbar-thumb:hover,
-  #browserGrid .list::-webkit-scrollbar-thumb:hover {
+  #browserGrid .list::-webkit-scrollbar-thumb:hover,
+  #panelSearch .list::-webkit-scrollbar-thumb:hover {
     background: rgba(128, 128, 128, .55);
   }
 }
+
+/* Hide legacy token/settings button (modal removed) */
+#settingsBtn { display: none !important; }
 
 /* If you ever want to hide scrollbars but keep scrollable behavior, add .no-scrollbar */
 .no-scrollbar {

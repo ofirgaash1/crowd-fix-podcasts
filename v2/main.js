@@ -10,9 +10,9 @@ import { setupWordsPager } from './data/words-pager.js';
 import { setupShowLayers } from './history/show-layers.js';
 import { setupScrollSync, setupGutters } from './ui/layout.js';
 import { setupKaraokeFollow } from './player/karaoke.js';
-import { setupSettingsModal } from './ui/settings-modal.js';
 import { setupThemeToggle } from './ui/theme.js';
 import { setupUIControls } from './ui/controls.js';
+import { showToast } from './ui/toast.js';
 import { setupMergeModal } from './ui/merge-modal.js';
 import { setupHud } from './ui/hud.js';
 import { setupHistoryPanel } from './history/panel.js';
@@ -31,11 +31,7 @@ const els = {
   player: document.getElementById('player'),
   folders: document.getElementById('folders'),
   files: document.getElementById('files'),
-  settingsBtn: document.getElementById('settingsBtn'),
-  modal: document.getElementById('modal'),
-  mSave: document.getElementById('mSave'),
-  mClear: document.getElementById('mClear'),
-  mClose: document.getElementById('mClose'),
+  // settings modal removed
   themeToggle: document.getElementById('themeToggle'),
   themeIcon: document.getElementById('themeIcon'),
   // Added controls
@@ -190,11 +186,9 @@ setupEditorPipelineAdapter();
 // Initialize browser (folder/file listing)
 setupBrowser(els, { bumpEditGen: () => { editGen++; } });
 
-// Initialize settings modal
-setupSettingsModal(els);
-
-// Initialize merge modal (handlers are wired in controls)
+// Initialize merge modal
 const mergeModal = setupMergeModal(els);
+
 
 // Initialize theme toggle
 setupThemeToggle(els);
@@ -211,6 +205,13 @@ setupScrollSync(els);
 
 // Karaoke follow (highlight + gentle auto-scroll)
 setupKaraokeFollow(els, virtualizer);
+
+// Global unauthorized handler (401 → toast + redirect)
+try {
+  window.addEventListener('v2:unauthorized', (e) => {
+    try { showToast('יש להתחבר', 'error'); } catch {}
+  });
+} catch {}
 
 /* transcript interactions */
 // Alt+click a word to seek/play from its start (keeps normal click for editing)
@@ -331,7 +332,7 @@ if (els.transcript && els.player) {
       console.log('search', q, 'in', (performance.now()-t0).toFixed(0)+'ms', 'got', state.results.length);
     } catch (e) {
       try { console.warn('search failed', e); } catch {}
-      try { const { showToast } = await import('./ui/toast.js'); showToast('שגיאת חיפוש', 'error'); } catch {}
+      try { const { showToast } = await import('./ui/toast.js'); showToast('יש להתחבר', 'error'); } catch {}
     } finally { loading = false; }
   }
 
@@ -431,7 +432,7 @@ if (els.transcript && els.player) {
       } catch {}
     } catch (e) {
       try { console.warn('episode open failed', e); } catch {}
-      try { const { showToast } = await import('./ui/toast.js'); showToast('שגיאת טעינת פרק', 'error'); } catch {}
+      try { const { showToast } = await import('./ui/toast.js'); showToast('יש להתחבר', 'error'); } catch {}
     }
   }
 
@@ -510,3 +511,4 @@ setupShowLayers(els, workers);
     }
   } catch {}
 })();
+

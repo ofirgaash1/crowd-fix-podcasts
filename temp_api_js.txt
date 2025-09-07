@@ -19,26 +19,6 @@ function getBackendBase() {
   return '';
 }
 
-// ---- Backend fetch helper (always include credentials/cookies) ----
-async function fetchBackend(url, init = {}) {
-  const opts = { ...init };
-  if (!('credentials' in opts)) opts.credentials = 'include';
-  const r = await fetch(url, opts);
-  try {
-    if (r && r.status === 401 && typeof window !== 'undefined') {
-      const base = getBackendBase();
-      try { window.dispatchEvent(new CustomEvent('v2:unauthorized', { detail: { url, base } })); } catch {}
-      try {
-        const loginUrl = (base || '') + '/login';
-        if (typeof location !== 'undefined' && !/\/login(\/|$)/.test(location.pathname)) {
-          setTimeout(() => { try { location.assign(loginUrl); } catch {} }, 600);
-        }
-      } catch {}
-    }
-  } catch {}
-  return r;
-}
-
 /**
  * Configure Supabase. Call once from app bootstrap:
  *   import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
@@ -107,7 +87,23 @@ export function markCorrection(filePath) {
   try { correctionsCache.add(filePath); } catch {}
 }
 
-// ---- Path helpers (dataset path normalization only) ----
+// ---- HF auth token helpers (read from localStorage like v1) ----
+const TOKEN_KEY = 'hfToken';
+function getHFToken() {
+  try { return localStorage.getItem(TOKEN_KEY) || ''; } catch { return ''; }
+}
+
+// ---- Hugging Face URL helpers ----
+const DATASET = 'ivrit-ai';
+const DS_AUDIO = 'audio-v2-opus';
+const DS_TRANS = 'audio-v2-transcripts';
+
+function encPath(p) { return String(p || '').split('/').map(encodeURIComponent).join('/'); }
+function hfRes(path, ds) {
+  return `https://huggingface.co/datasets/${DATASET}/${ds}/resolve/main/${encPath(path)}`;
+}
+function opusUrl(path) { return hfRes(path, DS_AUDIO); }
+function transUrl(path) { return hfRes(path, DS_TRANS); }
 function normPaths(folder, file) {
   const audioPath = `${folder}/${file}`;
   const trPath = `${folder}/${file.replace(/\.opus$/i, '')}/full_transcript.json.gz`;
@@ -127,7 +123,71 @@ export async function sha256Hex(text) {
   }
 }
 
-// (HF token + direct dataset access removed; backend is the source of truth.)
+// ---- Folder/File listing helpers ----
+function hfApiUrl(path, ds) {
+  const base = `https://huggingface.co/api/datasets/${DATASET}/${ds}/tree/main`;
+  if (!path) return [base, `${base}?recursive=false`];
+  return [
+    `${base}/${encPath(path)}`,
+    `${base}?path=${encodeURIComponent(path)}`
+  ];
+}
+
+function extractItems(json) {
+  if (Array.isArray(json)) return json;
+  if (json && Array.isArray(json.items)) return json.items;
+  if (json && Array.isArray(json.tree)) return json.tree;
+  if (json && Array.isArray(json.siblings)) return json.siblings;
+  return [];
+}
+
+function filterImmediate(items, base) {
+  const depth = base ? base.split('/').filter(Boolean).length : 0;
+  return items.filter(x => {
+    const p = x.path || x.rpath || '';
+    if (base && !p.startsWith(base + '/')) return false;
+    const d = p.split('/').filter(Boolean).length;
+    return d === depth + 1;
+  });
+}
+
+// ---- Fetch with HF auth if available ----
+async function fetchHF(url, init = {}) {
+  const headers = new Headers(init.headers || {});
+  if (!headers.has('Accept')) headers.set('Accept', 'application/json');
+  const tok = getHFToken();
+  // Only add Authorization for HF hosts
+  try {
+    const host = new URL(url).host;
+    if (tok && (host.endsWith('huggingface.co') || host.endsWith('hf.co'))) {
+      headers.set('Authorization', 'Bearer ' + tok);
+    }
+  } catch {}
+  return fetch(url, { ...init, headers, mode: 'cors', redirect: 'follow' });
+}
+
+// ---- Gzip decode (DecompressionStream with pako fallback) ----
+async function decodeMaybeGzip(response, originalUrl = '') {
+  const ct = (response.headers.get('content-type') || '').toLowerCase();
+  const isGz = ct.includes('application/gzip') || /\.gz($|\?)/i.test(originalUrl);
+
+  // Plain JSON
+  if (!isGz) return response.text();
+
+  // Streaming decode if supported
+  if (typeof DecompressionStream !== 'undefined' && response.body) {
+    const ds = new DecompressionStream('gzip');
+    const stream = response.body.pipeThrough(ds);
+    const decompressed = await new Response(stream).text();
+    return decompressed;
+  }
+
+  // Fallback: dynamic import pako
+  const { default: pako } = await import('https://esm.sh/pako@2.1.0');
+  const buf = await response.arrayBuffer();
+  const text = new TextDecoder('utf-8').decode(pako.ungzip(new Uint8Array(buf)));
+  return text;
+}
 
 // ---- Folder/File listing functions ----
 /**
@@ -139,7 +199,7 @@ export async function listFolders() {
   const url = base ? `${base}/folders` : '/folders';
   let r;
   try {
-    r = await fetchBackend(url);
+    r = await fetch(url, base ? undefined : { credentials: 'include' });
   } catch (e) {
     throw new Error(`שגיאה בטעינת רשימת תיקיות: כשל רשת אל ${url}: ${e?.message || e}`);
   }
@@ -164,7 +224,7 @@ export async function listFiles(folder) {
   const url = base ? `${base}/files?folder=${encodeURIComponent(folder)}` : `/files?folder=${encodeURIComponent(folder)}`;
   let r;
   try {
-    r = await fetchBackend(url);
+    r = await fetch(url, base ? undefined : { credentials: 'include' });
   } catch (e) {
     throw new Error(`שגיאה בטעינת רשימת קבצים: כשל רשת אל ${url}: ${e?.message || e}`);
   }
@@ -279,7 +339,7 @@ export async function saveCorrectionToDB(filePath, jsonObj) {
 export async function getLatestTranscript(filePath) {
   const base = getBackendBase();
   if (!base) return null;
-  const r = await fetchBackend(`${base}/transcripts/latest?doc=${encodeURIComponent(filePath)}`);
+  const r = await fetch(`${base}/transcripts/latest?doc=${encodeURIComponent(filePath)}`);
   if (!r.ok) return null;
   return await r.json();
 }
@@ -288,7 +348,7 @@ export async function getLatestTranscript(filePath) {
 export async function getTranscriptVersion(filePath, version) {
   const base = getBackendBase();
   if (!base || !filePath || !Number.isFinite(+version)) return null;
-  const r = await fetchBackend(`${base}/transcripts/get?doc=${encodeURIComponent(filePath)}&version=${encodeURIComponent(version)}`);
+  const r = await fetch(`${base}/transcripts/get?doc=${encodeURIComponent(filePath)}&version=${encodeURIComponent(version)}`);
   if (!r.ok) return null;
   return await r.json();
 }
@@ -300,7 +360,7 @@ export async function getTranscriptWords(filePath, version, opts = {}) {
   const qp = new URLSearchParams({ doc: filePath, version: String(version) });
   if (Number.isFinite(+opts.segment)) qp.set('segment', String(+opts.segment));
   if (Number.isFinite(+opts.count)) qp.set('count', String(+opts.count));
-  const r = await fetchBackend(`${base}/transcripts/words?${qp.toString()}`);
+  const r = await fetch(`${base}/transcripts/words?${qp.toString()}`);
   if (!r.ok) return [];
   return await r.json();
 }
@@ -315,7 +375,7 @@ export async function saveTranscriptVersion(filePath, { parentVersion = null, te
     text: String(text || ''),
     words: Array.isArray(words) ? words : []
   };
-  const r = await fetchBackend(`${base}/transcripts/save`, {
+  const r = await fetch(`${base}/transcripts/save`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
   });
   if (!r.ok) {
@@ -337,29 +397,7 @@ export async function getAllTranscripts(filePath) {
   try {
     const base = getBackendBase();
     if (!base || !filePath) return out;
-    // 0) Try to include baseline as version 0 so layers show v0->v1 too
-    try {
-      const idx = String(filePath).lastIndexOf('/');
-      if (idx > 0) {
-        const folder = String(filePath).slice(0, idx);
-        const file = String(filePath).slice(idx + 1);
-        const url = `${base}/episode?folder=${encodeURIComponent(folder)}&file=${encodeURIComponent(file)}`;
-        const r0 = await fetchBackend(url);
-        if (r0.ok) {
-          const j = await r0.json();
-          const trRaw = j && (j.transcript || j.baseline || null);
-          if (trRaw) {
-            try {
-              const norm = normalizeTranscript(trRaw);
-              const tokens0 = flattenToTokens(norm);
-              const text0 = wordsToText(tokens0);
-              if (text0) out.push({ version: 0, text: text0, user: 'baseline' });
-            } catch {}
-          }
-        }
-      }
-    } catch {}
-    const h = await fetchBackend(`${base}/transcripts/history?doc=${encodeURIComponent(filePath)}`);
+    const h = await fetch(`${base}/transcripts/history?doc=${encodeURIComponent(filePath)}`);
     if (!h.ok) return out;
     const hist = await h.json();
     const versions = Array.isArray(hist) ? hist.map(r => +r.version).filter(v => Number.isFinite(v) && v > 0) : [];
@@ -368,10 +406,7 @@ export async function getAllTranscripts(filePath) {
     for (const v of versions) {
       try {
         const row = await getTranscriptVersion(filePath, v);
-        if (row && typeof row.text === 'string') {
-          const user = row.created_by || row.author || row.user || '';
-          out.push({ version: v, text: row.text, user });
-        }
+        if (row && typeof row.text === 'string') out.push({ version: v, text: row.text });
       } catch {}
     }
     // Fallback if texts failed: try at least v1 and latest
@@ -380,22 +415,13 @@ export async function getAllTranscripts(filePath) {
         const v1 = await getTranscriptVersion(filePath, 1);
         const latestV = versions[versions.length - 1];
         const vl = await getTranscriptVersion(filePath, latestV);
-        if (v1 && typeof v1.text === 'string') out.push({ version: 1, text: v1.text, user: v1.created_by || v1.author || v1.user || '' });
-        if (vl && typeof vl.text === 'string') out.push({ version: latestV, text: vl.text, user: vl.created_by || vl.author || vl.user || '' });
+        if (v1 && typeof v1.text === 'string') out.push({ version: 1, text: v1.text });
+        if (vl && typeof vl.text === 'string') out.push({ version: latestV, text: vl.text });
         out.sort((a,b) => a.version - b.version);
       } catch {}
     }
   } catch {}
-  // Ensure ascending by version and unique versions
-  try {
-    const seen = new Set();
-    const uniq = [];
-    for (const v of out.sort((a,b)=>a.version-b.version)) {
-      const key = String(v.version);
-      if (!seen.has(key)) { seen.add(key); uniq.push(v); }
-    }
-    return uniq;
-  } catch { return out; }
+  return out;
 }
 // ---- Edits history (optional) -------------------------------------
 export async function saveTranscriptEdit() { return null; }
@@ -404,7 +430,7 @@ export async function saveTranscriptEdit() { return null; }
 export async function getConfirmations(filePath, version) {
   const base = getBackendBase();
   if (!base || !filePath || !Number.isFinite(+version)) return [];
-  const r = await fetchBackend(`${base}/transcripts/confirmations?doc=${encodeURIComponent(filePath)}&version=${encodeURIComponent(version)}`);
+  const r = await fetch(`${base}/transcripts/confirmations?doc=${encodeURIComponent(filePath)}&version=${encodeURIComponent(version)}`);
   if (!r.ok) return [];
   const arr = await r.json();
   return (arr || []).map(r => ({ id: r.id, range: [r.start_offset, r.end_offset], prefix: r.prefix, exact: r.exact, suffix: r.suffix }));
@@ -421,7 +447,7 @@ export async function saveConfirmations(filePath, version, base_sha256, ranges, 
     return { start_offset: s, end_offset: e, prefix: text.slice(preStart, s), exact: text.slice(s, e), suffix: text.slice(e, sufEnd) };
   };
   const items = (ranges || []).map(r => mkCtx(r[0], r[1]));
-  const r = await fetchBackend(`${base}/transcripts/confirmations/save`, {
+  const r = await fetch(`${base}/transcripts/confirmations/save`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ doc: filePath, version: +version, base_sha256: base_sha256 || '', items })
   });
@@ -473,7 +499,7 @@ export async function loadEpisode({ folder, file }) {
     let r;
     for (const url of fallbacks) {
       try {
-        r = await fetchBackend(url);
+        r = await fetch(url, url.startsWith('http') ? undefined : { credentials: 'include' });
         if (r.ok) {
           if (url.startsWith('http')) setRuntimeBase(new URL(url).origin);
           else if (typeof location !== 'undefined' && /^https?:$/.test(location.protocol)) setRuntimeBase(location.origin);
@@ -542,7 +568,7 @@ export const api = {
     const base = getBackendBase();
     if (base) {
       try {
-        const r = await fetchBackend(`${base}/transcripts/history?doc=${encodeURIComponent(filePath)}`);
+        const r = await fetch(`${base}/transcripts/history?doc=${encodeURIComponent(filePath)}`);
         if (r.ok) return await r.json();
       } catch {}
     }
