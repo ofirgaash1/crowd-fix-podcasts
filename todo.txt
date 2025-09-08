@@ -1,3 +1,0 @@
-dockerize
-auth through /login (implemented in explore)
-each edit layer will be assigned to a specific user
