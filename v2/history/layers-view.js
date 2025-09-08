@@ -9,7 +9,7 @@ import { canonicalizeText, lineTrim } from '../shared/canonical.js';
  * @param {(a:string,b:string, meta?:{parentV:number,childV:number,aFull:string,bFull:string,aMid:string,bMid:string})=>Promise<Array<[number,string]>>} getDiff - async function to get diffs
  * @returns {Promise<string>} HTML string
  */
-export async function buildLayersHTML(filePath, versions, getDiff) {
+export async function buildLayersHTML(filePath, versions, getDiff, timingMap) {
   const escapeHtml = (s) => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   if (!Array.isArray(versions) || versions.length <= 1) {
     return `<div class="hint">אין שכבות שינויים זמינות</div>`;
@@ -35,7 +35,36 @@ export async function buildLayersHTML(filePath, versions, getDiff) {
       const safe = escapeHtml(text || '');
       return op === 1 ? `<span class="diff-insert">${safe}</span>` : `<span class="diff-delete">${safe}</span>`;
     }).join('');
-    html += `<div class="diff-row" dir="auto">${rowHtml || '<span class="hint">(אין הבדלים להצגה)</span>'}</div></div>`;
+    html += `<div class="diff-row" dir="auto">${rowHtml || '<span class="hint">(אין הבדלים להצגה)</span>'}</div>`;
+
+    // Optional: render timing changes if provided for this child version
+    try {
+      const tOps = timingMap && (timingMap.get ? timingMap.get(childV) : timingMap[childV]);
+      if (tOps && tOps.length) {
+        const blocks = [];
+        for (const blk of tOps) {
+          if (!blk || blk.type !== 'timing_adjust') continue;
+          const items = Array.isArray(blk.items) ? blk.items : [];
+          const rows = items.slice(0, 50).map(it => {
+            const w = escapeHtml(String(it.word||''));
+            const os = Number(it.old_start||0).toFixed(3);
+            const ns = Number(it.new_start||0).toFixed(3);
+            const oe = Number(it.old_end||0).toFixed(3);
+            const ne = Number(it.new_end||0).toFixed(3);
+            const ds = (Number(it.delta_start||0) >= 0 ? '+' : '') + Number(it.delta_start||0).toFixed(3);
+            const de = (Number(it.delta_end||0) >= 0 ? '+' : '') + Number(it.delta_end||0).toFixed(3);
+            return `<div class="timing-row"><span class="word">${w}</span> · start ${os}→${ns} (${ds}), end ${oe}→${ne} (${de})</div>`;
+          }).join('');
+          const segInfo = (blk.segment_start != null && blk.segment_end != null) ? ` (קטעים ${blk.segment_start}–${blk.segment_end})` : '';
+          blocks.push(`<div class="timing-block"><div class="hint">⏱ שינויים בתזמונים${segInfo}</div>${rows || '<div class="hint">(אין שינויים מדידים)</div>'}</div>`);
+        }
+        if (blocks.length) {
+          html += `<div class="timing-layer">${blocks.join('')}</div>`;
+        }
+      }
+    } catch {}
+
+    html += `</div>`; // end layer
   }
   return html;
 }

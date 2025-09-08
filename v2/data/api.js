@@ -329,7 +329,46 @@ export async function saveTranscriptVersion(filePath, { parentVersion = null, te
 }
 
 /** Fetch transcript edits (diff layers) for a file */
-export async function getTranscriptEdits(filePath) { return []; }
+// (removed stub) getTranscriptEdits implemented below
+
+/**
+ * Fetch transcript edit records (including optional timing changes) for a file
+ * Row shape: { parent_version, child_version, dmp_patch, token_ops }
+ */
+export async function getTranscriptEdits(filePath) {
+  const base = getBackendBase();
+  if (!base || !filePath) return [];
+  const url = `${base}/transcripts/edits?doc=${encodeURIComponent(filePath)}`;
+  try {
+    const r = await fetchBackend(url);
+    if (!r.ok) return [];
+    return await r.json();
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Request alignment for a segment neighborhood (n-1..n+1) of the latest version
+ * Body: { doc, version?, segment, neighbors? }
+ * Returns summary of timing adjustments or error
+ */
+export async function alignSegment(opts) {
+  const base = getBackendBase();
+  if (!base) throw new Error('Backend base not configured');
+  const url = `${base}/transcripts/align_segment`;
+  const r = await fetchBackend(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(opts || {})
+  });
+  if (!r.ok) {
+    let msg = 'alignment failed';
+    try { msg = await r.text(); } catch {}
+    throw new Error(msg);
+  }
+  return await r.json();
+}
 
 /** Fetch all transcript versions with text (ASC) for diff layers */
 export async function getAllTranscripts(filePath) {

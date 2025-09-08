@@ -3,7 +3,8 @@ import { store, getState } from '../core/state.js';
 import { showToast } from './toast.js';
 import { canonicalizeText } from '../shared/canonical.js';
 import { verifyChainHash } from '../history/verify-chain.js';
-import { saveTranscriptVersion, markCorrection, getLatestTranscript, getTranscriptVersion, getTranscriptWords, saveConfirmations, sha256Hex } from '../data/api.js';
+import { saveTranscriptVersion, markCorrection, getLatestTranscript, getTranscriptVersion, getTranscriptWords, saveConfirmations, sha256Hex, alignSegment } from '../data/api.js';
+import { computeAbsIndexMap } from '../render/overlay.js';
 
 export function setupUIControls(els, { workers }, virtualizer, playerCtrl, isIdle) {
   // Probability highlight toggle
@@ -178,12 +179,41 @@ export function setupUIControls(els, { workers }, virtualizer, playerCtrl, isIdl
   // Save (queued)
   let saveQueued = false; let saving = false;
   const setSaveButton = (state) => { if (!els.submitBtn) return; if (state === 'waiting') { els.submitBtn.disabled = true; els.submitBtn.textContent = 'ממתין לעיבוד…'; } else if (state === 'saving') { els.submitBtn.disabled = true; els.submitBtn.textContent = 'שומר…'; } else { els.submitBtn.disabled = false; els.submitBtn.textContent = '⬆️ שמור תיקון'; } };
+  function getSelectionOffsets(container) {
+    try {
+      const sel = window.getSelection(); if (!sel || sel.rangeCount === 0) return null; const r = sel.getRangeAt(0);
+      const inC = n => n && (n === container || container.contains(n)); if (!(inC(r.startContainer) && inC(r.endContainer))) return null;
+      const measure = (node, off) => { const rng = document.createRange(); rng.selectNodeContents(container); try { rng.setEnd(node, off); } catch { return 0; } return rng.toString().length; };
+      const s = measure(r.startContainer, r.startOffset); const e = measure(r.endContainer, r.endOffset); return [Math.min(s, e), Math.max(s, e)];
+    } catch { return null; }
+  }
+  function estimateSegmentIndex(tokens, caretOffset) {
+    if (!Array.isArray(tokens) || !tokens.length) return 0;
+    const abs = computeAbsIndexMap(tokens);
+    let seg = 0;
+    for (let i = 0; i < tokens.length; i++) {
+      const t = tokens[i];
+      if (!t || t.state === 'del') continue;
+      if (t.word === '\n') { if ((abs[i] || 0) <= (caretOffset || 0)) seg++; continue; }
+      const startChar = abs[i] || 0;
+      const endChar = startChar + (t.word ? t.word.length : 0);
+      if ((caretOffset || 0) < endChar) break;
+    }
+    return Math.max(0, seg);
+  }
   async function performSave() {
     if (saving) return; const st = getState(); const tokens = st.tokens && st.tokens.length ? st.tokens : (st.baselineTokens || []);
     if (!tokens.length) { showToast('אין מה לשמור', 'error'); setSaveButton('idle'); saveQueued = false; return; }
     let text = canonicalizeText(st.liveText || ''); if (!text) text = canonicalizeText(tokens.map(t => t.word || '').join(''));
     const folder = els.transcript?.dataset.folder; const file = els.transcript?.dataset.file; if (!folder || !file) { showToast('לא נבחר קובץ', 'error'); setSaveButton('idle'); saveQueued = false; return; }
     const filePath = `${folder}/${file}`;
+    // Capture caret segment index before saving
+    let segIdxGuess = 0;
+    try {
+      const sel = getSelectionOffsets(els.transcript);
+      const caret = sel ? sel[0] : 0;
+      segIdxGuess = estimateSegmentIndex(tokens, caret);
+    } catch {}
     try {
       saving = true; setSaveButton('saving');
       // Pre-fetch latest for no-op check only
@@ -224,6 +254,21 @@ export function setupUIControls(els, { workers }, virtualizer, playerCtrl, isIdl
         console.debug('Edit history save skipped:', eHist?.message || eHist);
       }
       showToast('השינויים נשמרו בהצלחה', 'success');
+      // After save, call backend to align neighborhood (n-1..n+1) and record timing diffs
+      try {
+        if (typeof childV === 'number' && Number.isFinite(segIdxGuess)) {
+          if (els.submitBtn) { els.submitBtn.disabled = true; els.submitBtn.textContent = 'מיישר תזמונים…'; }
+          const summary = await alignSegment({ doc: filePath, version: childV, segment: Math.max(0, segIdxGuess), neighbors: 1 });
+          const cnt = Number(summary?.changed_count || 0);
+          if (cnt > 0) showToast(`עודכנו ${cnt} תזמונים מקומיים`, 'success');
+          else showToast('לא אותרו שינויים בתזמון', 'info');
+        }
+      } catch (e) {
+        console.warn('alignSegment failed:', e);
+        try { showToast('יישור תזמונים נכשל', 'error'); } catch {}
+      } finally {
+        setSaveButton('idle');
+      }
       // Verify version chain integrity (v1 + all ops → latest hash)
       try {
         const vRes = await verifyChainHash(filePath);

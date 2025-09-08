@@ -9,6 +9,9 @@ from typing import Optional
 
 import orjson
 from flask import Blueprint, current_app, jsonify, request, abort, session
+import subprocess
+import io
+import requests
 
 from ..services.db import DatabaseService
 
@@ -278,6 +281,203 @@ def save_version():
         raise
 
     return jsonify({ "version": new_version, "base_sha256": new_hash })
+
+
+@bp.route('/edits', methods=['GET'])
+def list_edits():
+    doc = request.args.get('doc', '').strip()
+    if not doc:
+        abort(400, 'missing ?doc=')
+    db = _db(); _ensure_schema(db)
+    cur = db.execute(
+        """
+        SELECT parent_version, child_version, dmp_patch, token_ops
+        FROM transcript_edits
+        WHERE file_path=?
+        ORDER BY child_version ASC
+        """,
+        [doc]
+    )
+    rows = cur.fetchall() or []
+    out = [
+        {"parent_version": r[0], "child_version": r[1], "dmp_patch": r[2], "token_ops": r[3]} for r in rows
+    ]
+    return jsonify(out)
+
+
+@bp.route('/align_segment', methods=['POST'])
+def align_segment():
+    body = request.get_json(force=True, silent=False) or {}
+    doc = (body.get('doc') or '').strip()
+    version = body.get('version', None)
+    seg = body.get('segment', None)
+    neighbors = int(body.get('neighbors', 1) or 1)
+    if not doc or seg is None:
+        abort(400, 'missing doc/segment')
+
+    db = _db(); _ensure_schema(db)
+    # Resolve version (latest if not provided)
+    if version is None:
+        latest = _latest_row(db, doc)
+        if not latest:
+            abort(404, 'no transcript available')
+        version = int(latest['version'])
+    else:
+        version = int(version)
+
+    # Gather words for segments [seg-neighbors .. seg+neighbors]
+    start_seg = max(0, int(seg) - max(0, neighbors))
+    end_seg = int(seg) + max(0, neighbors)
+    cur = db.execute(
+        """
+        SELECT segment_index, word_index, word, start_time, end_time, probability
+        FROM transcript_words
+        WHERE file_path=? AND version=? AND segment_index >= ? AND segment_index <= ?
+        ORDER BY word_index ASC
+        """,
+        [doc, version, start_seg, end_seg]
+    )
+    rows = cur.fetchall() or []
+    if not rows:
+        return jsonify({ "ok": False, "reason": "no-words" }), 200
+
+    # Build transcript text and time window
+    words = []
+    clip_start = None
+    clip_end = None
+    for seg_idx, wi, word, st, en, pr in rows:
+        try:
+            w = str(word or '')
+        except Exception:
+            w = ''
+        words.append({ 'seg': seg_idx, 'wi': wi, 'word': w, 'start': st, 'end': en })
+        if st is not None:
+            clip_start = st if clip_start is None else min(clip_start, float(st))
+        if en is not None:
+            clip_end = en if clip_end is None else max(clip_end, float(en))
+
+    transcript = ''.join(w['word'] for w in words)
+    if clip_start is None or clip_end is None or clip_end <= clip_start:
+        # No timings to slice; nothing to do
+        return jsonify({ "ok": False, "reason": "no-timings" }), 200
+
+    # Resolve audio path
+    try:
+        from ..utils import resolve_audio_path
+        audio_path = resolve_audio_path(doc)
+    except Exception:
+        audio_path = None
+    if not audio_path:
+        return ("audio not found", 404)
+
+    # Extract WAV clip via ffmpeg
+    pad = 0.10
+    ss = max(0.0, float(clip_start) - pad)
+    to = float(clip_end) + pad
+    cmd = [
+        'ffmpeg', '-hide_banner', '-loglevel', 'error',
+        '-ss', f'{ss:.3f}', '-to', f'{to:.3f}', '-i', audio_path,
+        '-ac', '1', '-ar', '16000', '-f', 'wav', 'pipe:1'
+    ]
+    try:
+        p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+        wav_bytes = p.stdout
+    except Exception as e:
+        return (f'ffmpeg failed: {getattr(e, "stderr", b"").decode("utf-8", "ignore")}', 500)
+
+    # Call external alignment endpoint
+    try:
+        files = { 'audio': ('clip.wav', wav_bytes, 'audio/wav') }
+        data = { 'transcript': transcript }
+        r = requests.post('http://silence-remover.com:8000/align', files=files, data=data, timeout=60)
+        if not r.ok:
+            return (f'align endpoint error: {r.status_code} {r.text[:200]}', 502)
+        res = r.json()
+    except Exception as e:
+        return (f'align request failed: {e}', 502)
+
+    # Map response words to global times and compute diffs
+    resp_words = (res or {}).get('words') or []
+    offset = ss  # our clip starts at ss; align times relative to this
+    # Filter out whitespace-only tokens from old words for comparison
+    old_seq = [w for w in words if not (w['word'] or '').isspace()]
+    diffs = []
+    count = min(len(old_seq), len(resp_words))
+    for i in range(count):
+        ow = old_seq[i]
+        rw = resp_words[i] or {}
+        try:
+            ow_text = str(ow.get('word') or '')
+            rw_text = str(rw.get('word') or '')
+        except Exception:
+            ow_text = str(ow.get('word') or '')
+            rw_text = str(rw.get('word') or '')
+        # Only compare when strings match exactly
+        if ow_text != rw_text:
+            continue
+        old_s = float(ow.get('start') or ow.get('end') or 0.0)
+        old_e = float(ow.get('end') or ow.get('start') or 0.0)
+        new_s = float(rw.get('start') or 0.0) + offset
+        new_e = float(rw.get('end') or 0.0) + offset
+        if not (new_e >= new_s):
+            continue
+        diffs.append({
+            'word': ow_text,
+            'old_start': old_s,
+            'old_end': old_e,
+            'new_start': new_s,
+            'new_end': new_e,
+            'delta_start': new_s - old_s,
+            'delta_end': new_e - old_e,
+            'segment_index': int(ow.get('seg') or seg),
+        })
+
+    # Update transcript_edits.token_ops for parent->child
+    parent_version = max(0, version - 1)
+    try:
+        cur = db.execute(
+            "SELECT dmp_patch, token_ops FROM transcript_edits WHERE file_path=? AND parent_version=? AND child_version=?",
+            [doc, parent_version, version]
+        )
+        ex = cur.fetchone()
+        dmp = ex[0] if ex else None
+        prev_ops_raw = ex[1] if ex else None
+        block = {
+            'type': 'timing_adjust',
+            'segment_start': start_seg,
+            'segment_end': end_seg,
+            'clip_start': ss,
+            'clip_end': to,
+            'items': diffs,
+            'service': 'silence-remover',
+        }
+        try:
+            ops = []
+            if prev_ops_raw:
+                parsed = orjson.loads(prev_ops_raw)
+                if isinstance(parsed, list):
+                    ops = parsed
+                elif isinstance(parsed, dict):
+                    ops = [parsed]
+            ops.append(block)
+            ops_json = orjson.dumps(ops).decode('utf-8')
+        except Exception:
+            ops_json = orjson.dumps([block]).decode('utf-8')
+
+        db.execute(
+            "INSERT OR REPLACE INTO transcript_edits (file_path, parent_version, child_version, dmp_patch, token_ops) VALUES (?, ?, ?, ?, ?)",
+            [doc, parent_version, version, dmp, ops_json]
+        )
+        db.commit()
+    except Exception:
+        db.execute("ROLLBACK")
+        raise
+
+    return jsonify({
+        'ok': True,
+        'changed_count': len([d for d in diffs if abs(d.get('delta_start', 0)) > 1e-3 or abs(d.get('delta_end', 0)) > 1e-3]),
+        'total_compared': len(diffs)
+    })
 
 
 @bp.route('/history', methods=['GET'])

@@ -4,7 +4,7 @@
 import { showToast } from '../ui/toast.js';
 import { buildLayersHTML } from './layers-view.js';
 import { setShowingLayers as setLayersFlag } from '../editor/pipeline.js';
-import { getAllTranscripts } from '../data/api.js';
+import { getAllTranscripts, getTranscriptEdits } from '../data/api.js';
 
 export function setupShowLayers(els, workers) {
   if (!els?.showLayersBtn) return;
@@ -21,6 +21,28 @@ export function setupShowLayers(els, workers) {
         try { showToast('אין שכבות שינויים זמינות', 'info'); } catch {}
         return;
       }
+
+      // Fetch timing edits map (child_version -> list of ops)
+      let timingMap = new Map();
+      try {
+        const edits = await getTranscriptEdits(filePath);
+        if (Array.isArray(edits)) {
+          const byChild = new Map();
+          for (const e of edits) {
+            const cv = e && e.child_version;
+            if (!Number.isFinite(+cv)) continue;
+            let ops = [];
+            try {
+              const parsed = (typeof e.token_ops === 'string') ? JSON.parse(e.token_ops) : e.token_ops;
+              if (Array.isArray(parsed)) ops = parsed;
+              else if (parsed && typeof parsed === 'object') ops = [parsed];
+            } catch { /* ignore */ }
+            if (!byChild.has(cv)) byChild.set(cv, []);
+            if (ops && ops.length) byChild.get(cv).push(...ops);
+          }
+          timingMap = byChild;
+        }
+      } catch {}
 
       const html = await buildLayersHTML(filePath, versions, async (a, b, meta) => {
         const parentV = meta?.parentV ?? '?';
@@ -46,7 +68,7 @@ export function setupShowLayers(els, workers) {
           console.groupEnd?.();
         } catch {}
         return diffs;
-      });
+      }, timingMap);
 
       if (els.diffBody) {
         try { setLayersFlag(true); } catch {}
