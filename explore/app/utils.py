@@ -104,6 +104,15 @@ def resolve_audio_path(source: str) -> Optional[str]:
             if p:
                 rp = _resolve_link_if_needed(p)
                 if rp:
+                    # If entry is a small pointer file, follow to blob target
+                    try:
+                        ptr = None
+                        if os.path.isfile(rp):
+                            ptr = _maybe_pointer_to_blob(rp)
+                        if ptr:
+                            return ptr
+                    except Exception:
+                        pass
                     return rp
             # Fallback: match by filename only if unique
             try:
@@ -116,6 +125,14 @@ def resolve_audio_path(source: str) -> Optional[str]:
                         if p:
                             rp = _resolve_link_if_needed(p)
                             if rp:
+                                try:
+                                    ptr = None
+                                    if os.path.isfile(rp):
+                                        ptr = _maybe_pointer_to_blob(rp)
+                                    if ptr:
+                                        return ptr
+                                except Exception:
+                                    pass
                                 return rp
                 # 2) endswith raw (pre-normalized) filename from source
                 fname_raw = rel[-1] if rel else ''
@@ -126,6 +143,14 @@ def resolve_audio_path(source: str) -> Optional[str]:
                         if p:
                             rp = _resolve_link_if_needed(p)
                             if rp:
+                                try:
+                                    ptr = None
+                                    if os.path.isfile(rp):
+                                        ptr = _maybe_pointer_to_blob(rp)
+                                    if ptr:
+                                        return ptr
+                                except Exception:
+                                    pass
                                 return rp
                 # 3) compare filename sans extension (case-insensitive)
                 import os as _os
@@ -141,6 +166,62 @@ def resolve_audio_path(source: str) -> Optional[str]:
                 pass
     except Exception:
         pass
+
+    def _maybe_pointer_to_blob(p: str) -> Optional[str]:
+        try:
+            # If file is very small and text-like, it may be a pointer to a blob path or SHA
+            if not os.path.isfile(p):
+                return None
+            if os.path.getsize(p) > 256:
+                return None
+            with open(p, 'rb') as fh:
+                data = fh.read(512)
+            # Try multiple decodings: utf-8, utf-16-le/be
+            decodings = ['utf-8', 'utf-16', 'utf-16-le', 'utf-16-be', 'latin-1']
+            text = ''
+            for enc in decodings:
+                try:
+                    text = data.decode(enc, 'ignore').strip()
+                    if text:
+                        break
+                except Exception:
+                    continue
+            if not text:
+                return None
+            # Case 1: contains explicit blobs path (relative)
+            if 'blobs' in text:
+                cand = os.path.normpath(os.path.join(os.path.dirname(p), text))
+                if os.path.exists(cand):
+                    return cand
+                # Also try under <audio_dir>/blobs/<sha>
+                try:
+                    sha = os.path.basename(text)
+                    cand2 = os.path.join(audio_dir, 'blobs', sha)
+                    if os.path.exists(cand2):
+                        return cand2
+                except Exception:
+                    pass
+            # Case 2: Git LFS pointer (spec v1)
+            if 'git-lfs' in text or 'oid sha256:' in text:
+                try:
+                    import re as _re
+                    m = _re.search(r'oid\s+sha256:([A-Fa-f0-9]{40,64})', text)
+                    if m:
+                        sha = m.group(1)
+                        cand = os.path.join(audio_dir, 'blobs', sha)
+                        if os.path.exists(cand):
+                            return cand
+                except Exception:
+                    pass
+            # Case 3: looks like a bare SHA (40-64 hex)
+            import re as _re
+            if _re.fullmatch(r'[A-Fa-f0-9]{40,64}', text):
+                cand3 = os.path.join(audio_dir, 'blobs', text)
+                if os.path.exists(cand3):
+                    return cand3
+        except Exception:
+            return None
+        return None
 
     # 1) Direct layout: <audio_dir>/<folder>/<file>
     if rel:
@@ -159,7 +240,10 @@ def resolve_audio_path(source: str) -> Optional[str]:
                     blob = os.path.join(audio_dir, 'blobs', sha)
                     if os.path.exists(blob):
                         return blob
-                # Not a link or already exists
+                # Not a link or already exists; check for pointer file
+                ptr = _maybe_pointer_to_blob(p1)
+                if ptr:
+                    return ptr
                 return p1 if os.path.isfile(p1) else None
             except Exception:
                 # Fall through to recursive search
@@ -181,8 +265,12 @@ def resolve_audio_path(source: str) -> Optional[str]:
                             return cand
                         sha = os.path.basename(target)
                         blob = os.path.join(audio_dir, 'blobs', sha)
-                        if os.path.exists(blob):
-                            return blob
+                    if os.path.exists(blob):
+                        return blob
+                    # Pointer file fallback
+                    ptr = _maybe_pointer_to_blob(m)
+                    if ptr:
+                        return ptr
                     if os.path.isfile(m):
                         return m
                 except Exception:

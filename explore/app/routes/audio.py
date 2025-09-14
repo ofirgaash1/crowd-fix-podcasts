@@ -62,6 +62,46 @@ def send_range_file(path, request_id=None, requested_name=None):
             if request_id:
                 logger.error(f"[TIMING] [REQ:{request_id}] Unable to determine file size for: {fs_path}")
             return "File not found", 404
+
+    # If this is a tiny text pointer, follow to blob target (safety net even if resolver missed it)
+    try:
+        if size <= 512:
+            with open(fs_path, 'rb') as _pf:
+                data = _pf.read(512)
+            # best-effort decodes
+            for enc in ('utf-8','utf-16','utf-16-le','utf-16-be','latin-1'):
+                try:
+                    text = data.decode(enc, 'ignore').strip()
+                except Exception:
+                    text = ''
+                if not text:
+                    continue
+                if 'blobs' in text or 'oid sha256:' in text or (len(text) >= 40 and all(ch in '0123456789abcdefABCDEF' for ch in text.strip().split('/')[-1])):
+                    # Try mapping to <AUDIO_DIR>/blobs/<sha>
+                    sha = None
+                    import re as _re
+                    m = _re.search(r'([A-Fa-f0-9]{40,64})', text)
+                    if m:
+                        sha = m.group(1)
+                    if sha:
+                        audio_dir = current_app.config.get('AUDIO_DIR')
+                        if audio_dir:
+                            cand = os.path.join(audio_dir, 'blobs', sha)
+                            if os.path.exists(cand):
+                                fs_path = cand
+                                # refresh size
+                                try:
+                                    with open(fs_path, 'rb') as _f_sz2:
+                                        _f_sz2.seek(0, os.SEEK_END)
+                                        size = _f_sz2.tell()
+                                except Exception:
+                                    size = os.path.getsize(fs_path)
+                                if request_id:
+                                    logger.info(f"[TIMING] [REQ:{request_id}] Pointer file redirected to blob: {fs_path}")
+                                break
+            # Fallthrough: if not redirected, continue with tiny file (will be unplayable)
+    except Exception:
+        pass
     # Determine content type using the requested name if available (handles blob targets)
     name_for_type = requested_name or path
     content_type = mimetypes.guess_type(name_for_type)[0] or 'application/octet-stream'
@@ -112,7 +152,21 @@ def send_range_file(path, request_id=None, requested_name=None):
         m = re.search(r'bytes=(\d+)-(\d*)', range_header)
         if m:
             byte1 = int(m.group(1))
-            byte2 = int(m.group(2)) if m.group(2) else size - 1
+            # If client specified end, clamp to EOF; otherwise default to EOF
+            if m.group(2):
+                byte2 = int(m.group(2))
+            else:
+                byte2 = size - 1
+            # Handle invalid/oversized ranges
+            if byte1 >= size:
+                # 416 Range Not Satisfiable
+                resp = Response(status=416)
+                resp.headers.add('Content-Range', f'bytes */{size}')
+                return resp
+            if byte2 >= size:
+                byte2 = size - 1
+            if byte2 < byte1:
+                byte2 = byte1
             length = byte2 - byte1 + 1
             
             resp = Response(generate_chunks(), 206, mimetype=content_type)
@@ -150,7 +204,7 @@ def serve_audio(filename):
     except Exception:
         pass
 
-    # Try to recover proper UTF-8 path from raw request URI (handles mojibake)
+    # Try to recover proper UTF-8 path from raw request URI (handles mojibake and double-encoding)
     src_candidates = []
     try:
         raw_uri = (request.environ.get('RAW_URI')
@@ -161,27 +215,66 @@ def serve_audio(filename):
                 base = raw_uri.split('?', 1)[0]
                 if '/audio/' in base:
                     raw_seg = base.split('/audio/', 1)[1]
-                    from urllib.parse import unquote
-                    fixed = unquote(raw_seg)
-                    if fixed:
-                        src_candidates.append(fixed)
-                        logger.info(f"[TIMING] [REQ:{request_id}] recovered_from_uri={repr(fixed)}")
+                    # Generate multiple decoding variants
+                    from urllib.parse import unquote, unquote_to_bytes
+                    cand_texts = []
+                    try:
+                        cand_texts.append(unquote(raw_seg))
+                        cand_texts.append(unquote(unquote(raw_seg)))
+                    except Exception:
+                        pass
+                    try:
+                        b = unquote_to_bytes(raw_seg)
+                        cand_texts.append(b.decode('utf-8', 'ignore'))
+                        # Sometimes browsers double-encode; try a second pass
+                        cand_texts.append(unquote(b.decode('latin-1', 'ignore')))
+                    except Exception:
+                        pass
+                    for fixed in cand_texts:
+                        if fixed and fixed not in src_candidates:
+                            src_candidates.append(fixed)
+                    if cand_texts:
+                        logger.info(f"[TIMING] [REQ:{request_id}] recovered_from_uri_variants={list(map(repr, cand_texts))}")
             except Exception:
                 pass
     except Exception:
         pass
 
-    # Add best-effort re-decode of the provided param
+    # Add best-effort re-decode of the provided param (route variable)
     try:
+        from urllib.parse import unquote, unquote_to_bytes
+        # 1) Direct param
+        if filename not in src_candidates:
+            src_candidates.append(filename)
+        # 2) Percent-decoded once/twice
+        try:
+            dec1 = unquote(filename)
+            if dec1 and dec1 not in src_candidates:
+                src_candidates.append(dec1)
+            dec2 = unquote(dec1)
+            if dec2 and dec2 not in src_candidates:
+                src_candidates.append(dec2)
+        except Exception:
+            pass
+        # 3) Bytes route (handles malformed % sequences)
+        try:
+            b = unquote_to_bytes(filename)
+            u8 = b.decode('utf-8', 'ignore')
+            if u8 and u8 not in src_candidates:
+                src_candidates.append(u8)
+        except Exception:
+            pass
+        # 4) latin1->utf8 fallback
         alt = filename.encode('latin-1', 'ignore').decode('utf-8', 'ignore')
-        if alt and alt != filename:
+        if alt and alt not in src_candidates:
             src_candidates.append(alt)
             logger.info(f"[TIMING] [REQ:{request_id}] latin1->utf8 candidate={repr(alt)}")
     except Exception:
         pass
 
-    # Always include original param last
-    src_candidates.append(filename)
+    # Deduplicate while preserving order
+    _seen = set()
+    src_candidates = [x for x in src_candidates if not (x in _seen or _seen.add(x))]
 
     try:
         audio_path = None
@@ -196,7 +289,7 @@ def serve_audio(filename):
             except Exception:
                 pass
             return send_range_file(audio_path, request_id, requested_name=filename)
-        logger.error(f"[TIMING] [REQ:{request_id}] Local audio not found. tried={src_candidates}")
+        logger.error(f"[TIMING] [REQ:{request_id}] Local audio not found. tried={list(map(repr, src_candidates))}")
         return (f"Audio not found: {filename}", 404)
         
     except Exception as e:
@@ -234,7 +327,7 @@ def debug_audio_resolve():
         direct = None
         raw_direct = None
     path = resolve_audio_path(src)
-    return ({
+    meta = {
         "requested": src,
         "computed_key": key,
         "index_size": len(idx),
@@ -242,7 +335,26 @@ def debug_audio_resolve():
         "resolved": path or None,
         "direct": direct or None,
         "raw_direct": raw_direct or None
-    }, 200)
+    }
+    try:
+        probe = path or direct or raw_direct
+        if probe and os.path.isfile(probe):
+            sz = os.path.getsize(probe)
+            meta["resolved_size"] = sz
+            if sz <= 512:
+                with open(probe, 'rb') as fh:
+                    data = fh.read(512)
+                meta["resolved_preview_hex"] = data[:64].hex()
+                previews = {}
+                for enc in ('utf-8','utf-16','utf-16-le','utf-16-be','latin-1'):
+                    try:
+                        previews[enc] = data.decode(enc, 'ignore')[:120]
+                    except Exception:
+                        pass
+                meta["resolved_preview_text"] = previews
+    except Exception:
+        pass
+    return (meta, 200)
 
 
 @bp.route('/debug/audio/reindex', methods=['GET','POST'])
@@ -267,5 +379,50 @@ def debug_audio_reindex():
         except Exception:
             pass
         return ({"count": len(idx), "sample": sample}, 200)
+    except Exception as e:
+        return (str(e), 500)
+
+
+@bp.route('/debug/audio/scan')
+def debug_audio_scan():
+    # Dev-only: scan a folder's files and report resolution + sizes
+    if os.environ.get('FLASK_ENV') != 'development':
+        return ("Not available", 404)
+    folder = request.args.get('folder', '').strip()
+    if not folder:
+        return ("missing folder", 400)
+    try:
+        from ..utils import _norm_text
+        idx = (current_app.config or {}).get('AUDIO_INDEX') or {}
+        # Collect files by suffix in index keys that end with this folder
+        files = []
+        for k in sorted(idx.keys()):
+            try:
+                if k.startswith(_norm_text(folder) + '/'):
+                    files.append(k.split('/', 1)[1])
+            except Exception:
+                continue
+        out = []
+        for f in files:
+            src = f"{folder}/{f}"
+            path = resolve_audio_path(src)
+            rec = { 'file': f, 'resolved': path }
+            try:
+                if path and os.path.isfile(path):
+                    sz = os.path.getsize(path)
+                    rec['size'] = sz
+                    if sz <= 512:
+                        with open(path, 'rb') as fh:
+                            data = fh.read(256)
+                        rec['preview_hex'] = data[:64].hex()
+                        try:
+                            text = data.decode('utf-8', 'ignore')
+                        except Exception:
+                            text = ''
+                        rec['preview_text'] = text[:120]
+            except Exception:
+                pass
+            out.append(rec)
+        return ({ 'folder': folder, 'count': len(out), 'items': out[:200] }, 200)
     except Exception as e:
         return (str(e), 500)
