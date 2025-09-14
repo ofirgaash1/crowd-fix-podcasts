@@ -621,34 +621,6 @@ def align_segment():
     })
 
 
-@bp.route('/history', methods=['GET'])
-def history():
-    doc = request.args.get('doc', '').strip()
-    if not doc:
-        abort(400, 'missing ?doc=')
-    db = _db(); _ensure_schema(db)
-    cur = db.execute(
-        """
-        SELECT t.version,
-               COALESCE(e.parent_version, NULL) AS parent_version,
-               t.base_sha256,
-               t.created_at,
-               COALESCE(t.created_by,'')
-        FROM transcripts t
-        LEFT JOIN transcript_edits e
-          ON e.file_path = t.file_path AND e.child_version = t.version AND e.parent_version = t.version - 1
-        WHERE t.file_path = ?
-        ORDER BY t.version ASC
-        """,
-        [doc]
-    )
-    rows = cur.fetchall() or []
-    out = [
-        {"version": r[0], "parent_version": r[1], "hash": r[2], "created_at": r[3], "created_by": r[4]} for r in rows
-    ]
-    return jsonify(out)
-
-
 @bp.route('/migrate_words', methods=['POST'])
 def migrate_words():
     body = request.get_json(force=True, silent=False) or {}
