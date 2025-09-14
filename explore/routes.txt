@@ -1,0 +1,16 @@
+Endpoint                       Methods              Rule
+--------------------------------------------------------------------------------
+search.get_segments_by_idx     OPTIONS,POST         /search/segment/by_idx
+search.get_segment             OPTIONS,POST         /search/segment
+auth.authorized                GET,HEAD,OPTIONS     /login/authorized
+auth.authorize                 GET,HEAD,OPTIONS     /authorize
+main.privacy_policy            GET,HEAD,OPTIONS     /privacy
+main.search                    GET,HEAD,OPTIONS     /search
+search.search                  GET,HEAD,OPTIONS     /search/
+auth.logout                    GET,HEAD,OPTIONS     /logout
+auth.login                     GET,HEAD,OPTIONS     /login
+main.home                      GET,HEAD,OPTIONS     /
+export.export_segment          GET,HEAD,OPTIONS     /export/segment/<source>/<path:filename>
+export.export_results_csv      GET,HEAD,OPTIONS     /export/results/<query>
+static                         GET,HEAD,OPTIONS     /static/<path:filename>
+audio.serve_audio              GET,HEAD,OPTIONS     /audio/<path:filename>
