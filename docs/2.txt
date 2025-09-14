@@ -1,0 +1,177 @@
+# Crowd-Fix Podcasts – פרק 2: היסטוריה + שכבות הבדלים
+
+ברוכים הבאים חזרה לסדרת הפודקאסטים "Crowd-Fix Podcasts"! בפרק 2, אנחנו נחקור איך העורך שומר גרסאות (versions), איך בונים היסטוריה, איך מציגים הבדלים (diffs), ואיך להשתמש בתצוגת "הצג שכבות" (Show Layers) לביקורת כללית – הכל בקצב נוח ומסודר. נתקדם לאט, עם הסברים מפורטים, כדי שגם אם אתה חדש בפיתוח, תוכל לעקוב. נשתמש בקוד שניתן להעתיק ישירות, ונכנס לפינות קטנות כמו איך מחשבים diffs כדי שיהיו קריאים, ולמה אנחנו מנרמלים טקסטים.
+
+אני אסביר מונחים בפשטות: למשל, "גרסה" (version) זה כמו צילום מסך של הטקסט בנקודה מסוימת – הוא לא משתנה אחרי ששומרים אותו. נשתמש בפורמט Markdown כדי להפריד פקודות קוד, ונסדר את הפרק בצורה כרונולוגית: מסקירה, דרך יצירה של גרסאות, צפייה בהיסטוריה, ועד בדיקות קצה.
+
+## סעיף 1: סקירה ומטרות
+
+בפרק 1 רצנו את האפליקציה, הגדרנו מונחים, וביצענו שמירה ראשונה. היום:
+- ניצור כמה גרסאות של תמליל.
+- נבדוק היסטוריית גרסאות ונסביר את המשמעות של קישורים בין גרסאות (lineage semantics).
+- נציג הבדלים בשתי דרכים: השוואה מול הנוכחי מהכרטיסייה היסטוריה, ותצוגת "הצג שכבות" רב-גרסאות.
+- נדבר על מקרי קצה כמו הבדלים ריקים וקבצים ארוכים, והנורמליזציה (normalization) שאנחנו עושים כדי לשמור על diffs קריאים.
+
+**הסבר פינה קטנה**: למה "lineage semantics"? זה אומר את החוקים שקובעים איך גרסאות מחוברות – כמו עץ משפחה. אם אין קישור מפורש, אנחנו מניחים שההורה הוא הגרסה הקודמת (v-1), כדי שההיסטוריה תישאר שימושית.
+
+## סעיף 2: תזכורת למבנה RTL
+
+הממשק בנוי מימין לשמאל (RTL): 
+- הפאנל של הדפדפן (תיקיות/קבצים) מימין – כאן אתה בוחר מה לטעון.
+- העורך באמצע – שם אתה עורך את הטקסט.
+- כרטיסיות ההבדלים/היסטוריה משמאל – נשתמש בשתיהן היום.
+
+**הסבר למתחילים**: RTL פירושו שהטקסט זורם מימין לשמאל, כמו בעברית. זה משפיע על כיוון הכפתורים והרשימות, אבל לא על הלוגיקה הפנימית של הקוד – הקוד עובד על סדר לוגי (logical order), לא ויזואלי.
+
+## סעיף 3: מונחים מרכזיים (היסטוריה והבדלים)
+
+לפני שנלחץ משהו, בוא נגדיר:
+- **גרסה (Version)**: כל שמירה מוצלחת יוצרת צילום קבוע של התמליל, עם מספר גרסה עולה (incrementing) ו-base_sha256 – חישוב hash (חתימה דיגיטלית) של הטקסט כדי לוודא שלא שונה.
+- **גרסת הורה (Parent version)**: בעת שמירה, אתה מציין את הגרסה שאתה חושב שאתה עורך. ההיסטוריה עוקבת אחר קישורים הורה→ילד. אם חסרים, חוזרים ל-v-1.
+- **נקודת סיום היסטוריה (History endpoint)**: השרת קורא /transcripts/history?doc=... ומחזיר רשימה עם parent_version, hash, created_at (זמן יצירה), created_by (מי יצר).
+- **אסטרטגיית הבדל (Diff strategy)**: בדפדפן, מחשבים הבדלים מחוץ לחוט הראשי. הפועל מפצל טקסט לשורות, אז לטוקנים, כדי לייצר הבדלים קריאים ויציבים. התוצאה: מערך פעולות (insertions, deletions, equals).
+
+**הסבר פינה קטנה**: למה off-main-thread? כי חישוב הבדלים יכול להיות כבד – אם זה בחוט הראשי, המסך יתקע. Worker זה כמו עובד נפרד שעושה את העבודה בלי להפריע.
+
+## סעיף 4: יצירת כמה גרסאות (פקודות מדויקות)
+
+אני אסמלץ כמה שמירות כדי לייצר גרסאות. פתח DevTools Console (בדפדפן: F12 או Ctrl+Shift+I, כרטיסייה Console). החלף doc בשלך.
+
+**קוד מלא (הרץ כולו)**:
+```
+(async () => {
+  const doc = 'FolderName/Filename.opus'; // החלף בשם האמיתי שלך
+  const v1Text = 'hello world';
+  // שמירה ראשונה: ללא הורה
+  const r1 = await fetch('http://localhost:5000/transcripts/save', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({
+      doc,
+      parentVersion: null,
+      expected_base_sha256: '',
+      text: v1Text,
+      words: [{ word: v1Text }]
+    })
+  });
+  console.log('save v1 status', r1.status, await r1.clone().json());
+
+  // v2: הוסף סימן קריאה
+  const latest1 = await (await fetch(`http://localhost:5000/transcripts/latest?doc=${encodeURIComponent(doc)}`, { credentials: 'include' })).json();
+  const v2Text = (latest1.text || '') + '!';
+  const r2 = await fetch('http://localhost:5000/transcripts/save', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({
+      doc,
+      parentVersion: latest1.version,
+      expected_base_sha256: latest1.base_sha256,
+      text: v2Text,
+      words: [{ word: v2Text }]
+    })
+  });
+  console.log('save v2 status', r2.status, await r2.clone().json());
+
+  // v3: הוסף מילה בהתחלה (שינוי לא חופף)
+  const latest2 = await (await fetch(`http://localhost:5000/transcripts/latest?doc=${encodeURIComponent(doc)}`, { credentials: 'include' })).json();
+  const v3Text = 'hi ' + (latest2.text || '');
+  const r3 = await fetch('http://localhost:5000/transcripts/save', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({
+      doc,
+      parentVersion: latest2.version,
+      expected_base_sha256: latest2.base_sha256,
+      text: v3Text,
+      words: [{ word: v3Text }]
+    })
+  });
+  console.log('save v3 status', r3.status, await r3.clone().json());
+})();
+```
+
+זה יוצר שלוש גרסאות עם שינויים קטנים. לחילופין, ערוך ידנית בעורך ולחץ “⬆️ שמור תיקון” בין שינויים.
+
+**הסבר פינה קטנה**: async/await זה דרך לכתוב קוד אסינכרוני (שמחכה לתגובות) בצורה פשוטה, כמו סיפור ליניארי. fetch זה פונקציה ששולחת בקשות לשרת.
+
+## סעיף 5: צפייה בהיסטוריה (ממשק + API)
+
+בעורך, עבר לכרטיסייה “היסטוריה” משמאל. רואה רשימת גרסאות. לחץ על גרסה – הממשק טוען אותה ומחשב הבדל מול הטקסט הנוכחי. זה שימושי לבדיקת שינויים מאז.
+
+API מתחת:
+```
+GET /transcripts/history?doc=<folder>/<file.opus>
+```
+
+**קוד מדויק (Console)**:
+```
+(async () => {
+  const doc = 'FolderName/Filename.opus';
+  const hist = await (await fetch(`http://localhost:5000/transcripts/history?doc=${encodeURIComponent(doc)}`, { credentials: 'include' })).json();
+  console.log('history', hist);
+})();
+```
+
+**הסבר פינה קטנה**: parent_version: אם יש קישורים מפורשים, משתמשים בהם; אחרת v-1. זה שומר על היסטוריה ליניארית גם אם חסרים נתונים.
+
+## סעיף 6: הצגת הבדלים (איך זה עובד ולמה קריא)
+
+הבדלים מחושבים ב-worker נפרד: מפצלים טקסט לשורות (שומרים \n), משכללים לטוקנים בשורות ששונו. מייצר מערך פעולות קטן שמצבעים ומציגים – חשוב ל-RTL.
+
+זה מייצר הבדלים יציבים וקריאים, בלי להקפיא.
+
+**הסבר פינה קטנה**: למה "stable"? diffs רגילים יכולים "לרעוד" אם שינויים קטנים – כאן, הפיצול לשורות/טוקנים שומר על קריאות.
+
+## סעיף 7: הצג שכבות (סקירה גרסה-לגרסה)
+
+עבר לכרטיסייה “השוואות” משמאל, לחץ “הצג שכבות שינויים”. זה בונה זוגות סמוכים (vN→vN+1), טוען טקסטים, מחשב diffs, ומציג ערימה. דילג על זוגות ללא שינויים.
+
+שימושי לביקורת עריכות קטנות.
+
+## סעיף 8: מקרי קצה וביצועים
+
+- הבדלים ריקים: אם שמירות זהות או רק נורמליזציה (שורות/תווים בלתי נראים), דילג בשכבות.
+- תוכן ארוך: diffs off-thread, רינדור ווירטואלי. HUD (Ctrl+Alt+D) מראה זמנים נמוכים.
+- היסטוריה לא ליניארית: UI מציג ליניארי; שרת שומר קישורים לדאג (DAG) עתידי.
+
+## סעיף 9: אימות גרסאות ספציפיות
+
+**קוד מדויק**:
+```
+(async () => {
+  const doc = 'FolderName/Filename.opus';
+  const v1 = await (await fetch(`http://localhost:5000/transcripts/get?doc=${encodeURIComponent(doc)}&version=1`, { credentials: 'include' })).json();
+  const v3 = await (await fetch(`http://localhost:5000/transcripts/get?doc=${encodeURIComponent(doc)}&version=3`, { credentials: 'include' })).json();
+  console.log('v1.text', v1.text);
+  console.log('v3.text', v3.text);
+})();
+```
+
+ייצוא: /export/transcript/vtt?doc=...&version=N
+
+## סעיף 10: איך לקרוא את הקוד להיסטוריה + שכבות
+
+היסטוריה: explore/app/routes/transcripts.py – /transcripts/history בונה lineage מטבלאות.
+שכבות: v2/data/api.js – getAllTranscripts(); v2/history/show-layers.js – כפתור ומחשב diffs; v2/workers/diff-worker.js – לוגיקה.
+
+## סעיף 11: טיפים מעשיים להבדלים ב-RTL
+
+הרינדור מצייר טוקן-טוקן, מכבד טקסט דו-כיווני. פיצול על \n מונע "רעידות". אם יישור ויזואלי מוזר, בדוק \n עקבי.
+
+## סעיף 12: סיכום ומה הבא
+
+יצרנו גרסאות, חקרנו היסטוריה, ראינו diffs ושכבות. הבא: התנגשויות ומיזוג.
+
+**נספח A: סיכום פקודות**
+- יצירת גרסאות: העתק בלוק מסעיף 4.
+- קריאת היסטוריה: העתק מסעיף 5.
+- גרסאות ספציפיות: מסעיף 9.
+- שכבות: בעורך – “השוואות” > “הצג שכבות שינויים”.
+
+**נספח B: איפה החלקים**
+- שרת: explore/app/routes/transcripts.py (היסטוריה + שמירה); export.py (ייצוא).
+- חלק קדמי: v2/main.js (חיווט); v2/workers/diff-worker.js (diffs); v2/history/show-layers.js (שכבות).
+

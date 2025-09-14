@@ -1,0 +1,182 @@
+ “Crowd‑Fix Podcasts — Episode 11: Merging & History Audit Trails”
+Voiceover: Welcome back. Today we’ll explore how merges are represented over time, how we read and validate the version lineage, how we inspect textual diffs and timing adjustments, and how to build a QA report across versions.
+Prereqs and RTL Reminder
+Dev: Run the backend with dev helpers (Episode 1).
+Windows: .venv\Scripts\Activate.ps1; pip install -r explore/requirements.txt; ./dev.ps1
+bash: python -m venv .venv && source .venv/bin/activate; pip install -r explore/requirements.txt; ./dev.sh
+Open: v2/index.html or http://localhost:5000/v2
+RTL UI: browser panel (folders/files) on the right; transcript editor center; Diff/History left.
+What We Mean by “Merge” Here
+A “merge” in this app is a content resolution step when the server rejects a save with HTTP 409 due to a version/hash conflict.
+The backend responds with a payload: base (parent), latest (server), and client (your edits). The UI lets you:
+Reload latest and discard local edits.
+Auto‑merge when edits are non‑overlapping.
+Keep the modal open for manual handling if overlap exists.
+How Versions and Edits Are Stored
+transcripts(file_path, version, base_sha256, text, words, created_by, created_at): immutable rows per version.
+transcript_edits(file_path, parent_version, child_version, dmp_patch, token_ops, created_at):
+dmp_patch: a compact textual diff (we store a unified diff created on the backend) between two versions (parent→child). This is for audit/overview, not for patch application.
+token_ops: JSON audit blocks; we append “timing_adjust” items after alignment (Episode 7).
+Note: We always store the full text for each version; reconstruction from diffs is not required — the diffs exist for audits and summaries.
+Fetch History: Version Lineage
+In the editor, switch to History (left tab “היסטוריה”) to see versions.
+API:
+GET /transcripts/history?doc=<folder>/<file.opus>
+DevTools: copy/paste
+(async () => {
+const doc = 'FolderName/Filename.opus'; // replace
+const hist = await (await fetch(http://localhost:5000/transcripts/history?doc=${encodeURIComponent(doc)}, { credentials: 'include' })).json();
+console.table(hist.map(h => ({
+version: h.version, parent: h.parent_version, hash: (h.hash||'').slice(0,8), at: h.created_at, by: h.created_by || ''
+})));
+})();
+Interpretation:
+parent_version may be inferred (v−1) when explicit links weren’t present; otherwise it reflects true parent→child edges from transcript_edits.
+Fetch Edits: Diffs and Timing Adjustments
+API:
+GET /transcripts/edits?doc=<doc>
+DevTools:
+(async () => {
+const doc = 'FolderName/Filename.opus';
+const edits = await (await fetch(http://localhost:5000/transcripts/edits?doc=${encodeURIComponent(doc)}, { credentials: 'include' })).json();
+// For a quick glance, show parent→child and whether token_ops exist:
+console.table(edits.map(e => ({
+parent: e.parent_version, child: e.child_version, hasPatch: !!(e.dmp_patch), hasTokenOps: !!(e.token_ops)
+})));
+})();
+dmp_patch: unified diff text between parent and child (base→child).
+token_ops:
+An array (or single object) of recorded operations. For alignment, you’ll see:
+type: "timing_adjust"
+segment_start / segment_end
+items: per-word old/new times and deltas
+service: external aligner name
+Reconstruct the Chain (Validation and QA)
+We’ll fetch each version’s full text and verify integrity, then compute readable diffs for a report (in the browser).
+We’ll use the frontend’s diff-core to compute human-friendly diffs locally.
+Step A — Fetch history and all version texts:
+(async () => {
+const doc = 'FolderName/Filename.opus';
+const hist = await (await fetch(http://localhost:5000/transcripts/history?doc=${encodeURIComponent(doc)}, { credentials: 'include' })).json();
+const versions = hist.map(h => h.version).sort((a,b) => a-b);
+const texts = new Map();
+for (const v of versions) {
+const row = await (await fetch(http://localhost:5000/transcripts/get?doc=${encodeURIComponent(doc)}&version=${v}, { credentials: 'include' })).json();
+texts.set(v, row.text || '');
+}
+console.log('versions', versions);
+window._audit = { doc, versions, texts };
+})();
+
+This gives us all texts so we can compute diffs client-side.
+Step B — Diff each adjacent pair for readable inserts/deletes:
+(async () => {
+// Diff adjacent versions vN -> vN+1 using the worker’s diff-core
+const { diffStrings } = await import('/v2/workers/diff-core.js'); // path resolves when opened from /v2
+const out = [];
+for (let i = 0; i < window._audit.versions.length - 1; i++) {
+const aV = window._audit.versions[i];
+const bV = window._audit.versions[i+1];
+const a = window._audit.texts.get(aV) || '';
+const b = window._audit.texts.get(bV) || '';
+const diffs = diffStrings(a, b);
+const insertedLen = diffs.filter(d => d[0] === 1).reduce((n, d) => n + String(d[1]).length, 0);
+const deletedLen = diffs.filter(d => d[0] === -1).reduce((n, d) => n + String(d[1]).length, 0);
+out.push({ from: aV, to: bV, ops: diffs.length, insertedLen, deletedLen });
+}
+console.table(out);
+window._audit.overview = out;
+})();
+
+Result: A quick overview per pair: how many ops, how many chars inserted/deleted — useful for audits.
+Step C — Timing adjustments per pair:
+(async () => {
+const doc = window._audit.doc;
+const edits = await (await fetch(http://localhost:5000/transcripts/edits?doc=${encodeURIComponent(doc)}, { credentials: 'include' })).json();
+// Map child_version -> timing adjustments summary
+const timing = new Map();
+for (const e of edits) {
+if (!e.token_ops) continue;
+let blocks = [];
+try {
+blocks = (typeof e.token_ops === 'string') ? JSON.parse(e.token_ops) : e.token_ops;
+if (!Array.isArray(blocks)) blocks = [blocks];
+} catch { blocks = []; }
+const adj = blocks.filter(b => b && b.type === 'timing_adjust');
+if (adj.length) {
+timing.set(e.child_version, {
+countBlocks: adj.length,
+items: adj.reduce((n, b) => n + (Array.isArray(b.items) ? b.items.length : 0), 0)
+});
+}
+}
+// Join with our diff overview
+const rows = (window._audit.overview || []).map(r => ({
+from: r.from, to: r.to,
+insertedLen: r.insertedLen,
+deletedLen: r.deletedLen,
+timingBlocks: timing.get(r.to)?.countBlocks || 0,
+timingItems: timing.get(r.to)?.items || 0
+}));
+console.table(rows);
+})();
+
+Now you have, per adjacent version pair, both textual diff magnitude and timing-adjust metadata.
+Produce a CSV‑like Report (Copy/Paste)
+Create a CSV line per pair:
+(() => {
+const rows = (window._audit.overview || []).map(r => ({
+from: r.from, to: r.to, insertedLen: r.insertedLen, deletedLen: r.deletedLen
+}));
+const header = 'from,to,insertedLen,deletedLen';
+const csv = [header, ...rows.map(r => ${r.from},${r.to},${r.insertedLen},${r.deletedLen})].join('\n');
+console.log(csv);
+// Optional: download
+const blob = new Blob([csv], { type: 'text/csv' });
+const a = document.createElement('a');
+a.href = URL.createObjectURL(blob);
+a.download = 'audit_diffs.csv';
+a.click();
+})();
+For timing metadata, add timingBlocks/timingItems fields from Step C.
+Understand What dmp_patch Is Good For
+dmp_patch (stored unified diff) is useful as a compact textual marker of change per pair. For large histories, you can index these strings (e.g., length, num lines) to flag suspiciously large edits.
+We do not apply these patches to reconstruct text; we fetch stored versions directly. This is more robust and avoids patch-application errors.
+Deep Dive: UI Auto‑Merge Heuristics
+In non-overlapping edits, the UI’s auto-merge:
+Converts base→latest and base→client diffs into absolute edit spans, checks for overlaps, and, if clear, applies them both onto the base from right to left.
+Saves the merged result against the true latest parentVersion/base hash, resolving the conflict.
+Code pointers:
+v2/ui/controls.js: conflict handling, diff→edits conversion, overlap checks, and merged save.
+v2/ui/merge-modal.js: modal rendering and event wiring.
+Frontend QA: Recompute Difffs On Demand
+Use the console helper:
+__diff(baseText, currentText)
+Or the module:
+import('/v2/workers/diff-core.js').then(m => m.diffStrings(a, b))
+For RTL, diffs operate on logical text order and preserve newline boundaries; rendering then adds proper RTL layout in the view.
+Edge Cases and Pitfalls
+Branching history:
+The current UI presents a linear history. The backend tracks explicit parent_version edges if present; if you later add branching saves/merges, you may want a DAG viewer for a true graph.
+Empty diffs:
+Sometimes a save occurs without visible textual changes (e.g., normalization or metadata only). Layers omit “no-change” pairs in the “Show Layers” UI to declutter.
+Very large changes:
+For massive edits, the worker still computes diffs off the main thread. The UI remains responsive; consider chunked review (History tab or Layers view).
+Where to Look in Code (Recap)
+Backend:
+explore/app/routes/transcripts.py:
+/transcripts/save (409 payloads with base/latest/client diffs)
+/transcripts/history (version lineage)
+/transcripts/edits (per-pair dmp_patch + token_ops)
+Frontend:
+v2/history/panel.js (History tab behavior)
+v2/history/show-layers.js (layers overview, diff of adjacent pairs)
+v2/workers/diff-core.js and diff-worker.js (diff computation)
+v2/ui/merge-modal.js and v2/ui/controls.js (conflict modal + auto‑merge)
+Practical Playbook
+“Audit what changed over time”:
+Fetch history, fetch all version texts, diff adjacent pairs with diff-core, tabulate inserted/deleted characters.
+“Audit timings after alignment”:
+Fetch /transcripts/edits, parse token_ops timing_adjust, count changed items per pair, and add to your report.
+“Investigate a suspicious jump”:
+Use Layers (“הצג שכבות שינויים”) to view that pair’s diffs at a glance; then drill down with a targeted diff in the console if needed.

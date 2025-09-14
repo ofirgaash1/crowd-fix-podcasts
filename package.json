@@ -1,0 +1,14 @@
+{
+  "name": "explore-v2-e2e",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@playwright/test": "^1.46.0"
+  },
+  "scripts": {
+    "e2e": "playwright test",
+    "e2e:headed": "playwright test --headed",
+    "e2e:install": "playwright install --with-deps"
+  }
+}
+

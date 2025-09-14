@@ -1,0 +1,154 @@
+“Crowd‑Fix Podcasts — Episode 9: Data Ops & Backfilling”
+Voiceover: Today is a data‑ops day. We’ll talk about normalized storage of words, how to backfill words for existing versions, how to verify results, and how to kick off batch alignments segment‑by‑segment. We’ll keep it practical and careful.
+Why Normalize Words
+Voiceover: The backend can store words two ways:
+Embedded JSON on each transcript version (quick to write, not great for partial reads).
+A normalized table, transcript_words, with one row per token (fast to query segments and windows).
+Voiceover: Normalization matters because:
+Partial reads with segment windows are fast: SELECT … WHERE file_path=? AND version=? AND segment_index BETWEEN …
+Pagination and streaming words into the virtualizer are much smoother.
+Voiceover: We’ll migrate each version’s JSON words (or split the text if words are missing) into transcript_words.
+Schema Recap (what gets created)
+transcripts(file_path, version, base_sha256, text, words, created_by, created_at)
+transcript_words(file_path, version, segment_index, word_index, word, start_time, end_time, probability)
+PRIMARY KEY(file_path, version, word_index)
+Indexes on (file_path, version) and (file_path, version, segment_index)
+Voiceover: Newline tokens “\n” separate segments. In the normalized table, we do not store a row for the newline. Instead, we increment segment_index when encountering a newline as we insert the next token row.
+Data Prereqs (Dev Mode)
+Windows PowerShell:
+.venv\Scripts\Activate.ps1
+pip install -r explore/requirements.txt
+./dev.ps1
+bash/macOS/Linux:
+python -m venv .venv && source .venv/bin/activate
+pip install -r explore/requirements.txt
+chmod +x dev.sh && ./dev.sh
+Open v2/index.html or http://localhost:5000/v2. (RTL: browser panel right, editor center, diff/history left.)
+One‑Shot Backfill for a Version (exact API call)
+Voiceover: The backend exposes a “migrate words” endpoint that fills transcript_words from transcripts.words JSON; if missing, it naively splits text into one token (so reads still work).
+DevTools Console (replace doc/version):
+(async () => {
+const doc = 'FolderName/Filename.opus'; // replace
+const version = 1; // pin a version
+const r = await fetch('http://localhost:5000/transcripts/migrate_words', {
+method: 'POST',
+headers: { 'Content-Type': 'application/json' },
+credentials: 'include',
+body: JSON.stringify({ doc, version }) // omit version to migrate all versions for doc
+});
+console.log('migrate_words', r.status, await r.clone().json());
+})();
+Voiceover: If you omit version, the backend iterates all versions for that doc, migrates normalized rows, and returns a count.
+Verify Normalized Reads (exact API call)
+Voiceover: After backfill, fetching words in segment windows should hit the normalized table and include newline tokens between segments in the response.
+DevTools Console:
+(async () => {
+const doc = 'FolderName/Filename.opus';
+const version = 1;
+const seg = 0, count = 2;
+const r = await fetch(http://localhost:5000/transcripts/words?doc=${encodeURIComponent(doc)}&version=${version}&segment=${seg}&count=${count}, { credentials: 'include' });
+const toks = await r.json();
+console.log('window tokens', toks);
+console.log('reconstructed text', toks.map(t => t.word || '').join(''));
+})();
+Voiceover: You should see tokens for segment 0..1, with a “\n” token inserted when crossing the boundary. If normalized rows are missing, the endpoint falls back to stored JSON, preserving “\n”.
+Backfill All Versions for One Doc (carefully)
+Voiceover: In practice, you’ll want to backfill every version for a doc. Use the version omission (migrate them all).
+DevTools Console:
+(async () => {
+const doc = 'FolderName/Filename.opus';
+const r = await fetch('http://localhost:5000/transcripts/migrate_words', {
+method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
+body: JSON.stringify({ doc }) // no version → all versions for this doc
+});
+console.log('doc migrate result', await r.json());
+})();
+Voiceover: The migration is idempotent: it clears rows for that (doc, version) and re‑inserts from JSON words, or splits the text if words are missing.
+Batch Backfill Across Many Docs (safe scripting)
+Voiceover: Want to do a repo‑wide backfill? Here are careful approaches. Always do a dry run first and work in small batches.
+Option A — PowerShell (Windows)
+
+Fetch folders → for each folder, fetch files → migrate each doc:
+$base = 'http://localhost:5000'
+$folders = Invoke-RestMethod -Uri "$base/folders" -Method GET
+foreach ($f in $folders) {
+$files = Invoke-RestMethod -Uri "$base/files?folder=$( [uri]::EscapeDataString($f.name) )" -Method GET
+foreach ($file in $files) {
+$doc = "$($f.name)/$($file.name)"
+Write-Host "Migrating $doc"
+Invoke-RestMethod -Uri "$base/transcripts/migrate_words" -Method POST -ContentType "application/json" -Body (@{ doc = $doc } | ConvertTo-Json)
+Start-Sleep -Milliseconds 100
+}
+}
+Voiceover: The 100ms sleep is a nicety to avoid hammering the DB on slow disks.
+Option B — bash (macOS/Linux)
+
+curl + jq loop (jq required):
+BASE='http://localhost:5000'
+for folder in $(curl -s "$BASE/folders" | jq -r '.[].name'); do
+curl -s "$BASE/files?folder=$(python - <<'PY'\nimport urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))\nPY\n "$folder")"
+| jq -r '.[].name'
+| while read -r file; do
+doc="$folder/$file"
+echo "Migrating $doc"
+curl -s -X POST -H 'Content-Type: application/json' -d "{"doc":"$doc"}" "$BASE/transcripts/migrate_words" >/dev/null
+sleep 0.1
+done
+done
+Batch Alignment (segment neighborhoods)
+Voiceover: After words are normalized, you can align segments in small windows. This is slower and requires local audio.
+Strategy:
+For each doc, read latest version (or iterate versions).
+Decide segment range (e.g., 0..N by inspecting transcript_words max segment_index).
+POST /transcripts/align_segment per segment with neighbors=1 (or 2), with small delays.
+DevTools Console (illustrative):
+(async () => {
+const doc = 'FolderName/Filename.opus';
+const latest = await (await fetch(http://localhost:5000/transcripts/latest?doc=${encodeURIComponent(doc)}, { credentials: 'include' })).json();
+const version = latest?.version;
+// Probe a small window 0..9
+for (let seg = 0; seg < 10; seg++) {
+const r = await fetch('http://localhost:5000/transcripts/align_segment', {
+method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
+body: JSON.stringify({ doc, version, segment: seg, neighbors: 1 })
+});
+const j = await r.json().catch(()=>({}));
+console.log('seg', seg, '→', j);
+await new Promise(r => setTimeout(r, 120));
+}
+})();
+Voiceover: This records timing adjustments in transcript_edits.token_ops for each (parent→child) link as audit blocks.
+Validating Results
+Voiceover: After backfill + alignment:
+Words window fetches (Step 5) respond quickly and include “\n” between segments.
+Exports (Episode 5) behave: VTT shows meaningful times; CSV shows sensible start/end per segment.
+Edits log (timing_adjust) exists when alignment succeeded:
+GET /transcripts/edits?doc=<doc> → look at token_ops.
+Edge Cases & Safety
+No words in JSON:
+Backfill will synthesize one token from text to keep the pipeline alive.
+Consecutive newlines:
+You’ll get short/empty segments; that’s legal. You can write a small admin script to collapse multiple newlines if policy demands it.
+Hashes and versions:
+Backfill doesn’t change transcript text or version hashes; it only populates normalized rows.
+Audio missing:
+Alignment will return 404 “audio not found”—not a failure for backfill, only for timing updates.
+Throttling:
+Add short sleeps between requests in batch scripts to keep I/O smooth.
+Where This Lives (code pointers)
+Backfill route:
+explore/app/routes/transcripts.py: POST /transcripts/migrate_words
+Clears prior normalized rows for that (doc, version), populates from JSON words or naïve split.
+Words window API:
+GET /transcripts/words?doc=…&version=…[&segment=N][&count=K] prioritizes transcript_words, falls back to JSON words.
+Alignment route:
+POST /transcripts/align_segment: segment windowing, ffmpeg slice, external align call, token_ops audit.
+Exports:
+explore/app/routes/export.py: VTT/CSV/JSON builders (use normalized words when available).
+Practical Playbooks
+“Make old versions fast to read”:
+For each doc: POST /transcripts/migrate_words (no version) → verify with GET /transcripts/words…
+“Align after human edits”:
+After a big save: for each edited segment neighborhood, POST /transcripts/align_segment with neighbors=1..2.
+“QA pack”:
+Export pinned VTT/CSV for that version (Episode 5), and attach confirmations (Episode 4) to show verified spans.

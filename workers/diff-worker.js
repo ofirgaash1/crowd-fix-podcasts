@@ -403,7 +403,7 @@ self.onmessage = async (ev) => {
         console.log(`[diff:${debugTag}] lines.pre`, preL, 'lines.post', postL, 'a.mid.lines', aLines0.length - preL - postL, 'b.mid.lines', bLines0.length - preL - postL);
       }
 
-      let diffs = granularDiff(baseText, nextText, debugTag);
+      let diffs = coreDiff(baseText, nextText, debugTag);
       let strategy = 'granular';
       // If something goes wrong (unlikely), fall back to previous strategies
       if (!Array.isArray(diffs) || diffs.length === 0) {
@@ -569,3 +569,4 @@ function simpleGreedyDiff(a, b) {
   while (j < b.length) diffs.push([1, b[j++]]);
   return coalesceSeq(diffs, (arr) => arr.join(''));
 }
+import { diffStrings as coreDiff } from './diff-core.js';

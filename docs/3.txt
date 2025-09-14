@@ -1,0 +1,220 @@
+# Crowd-Fix Podcasts – פרק 3: התנגשויות ומיזוג
+
+ברוכים הבאים חזרה לסדרת הפודקאסטים "Crowd-Fix Podcasts"! בפרק 3, אנחנו נעמיק בהתנגשויות (conflicts) ומיזוג (merging). ניצור התנגשות אמיתית (409), נקרא את התגובה מהשרת, נסביר איך hashes וגרסאות הורים עובדים, ונעבור על אפשרויות מיזוג אוטומטי ומדריך ידני. נצביע גם על הקוד המדויק כדי שתוכל לחקור בעצמך. נתקדם לאט, עם הסברים ברורים ומפורטים, כולל פינות קטנות כמו למה משתמשים גם בגרסה וגם ב-hash, ואיך לטפל בהבדלי קידוד שגורמים להתנגשויות שווא.
+
+אם אתה חדש בפיתוח, "התנגשות" זה כמו ששני אנשים עורכים את אותו מסמך בו זמנית – השרת צריך להחליט איך לשלב. נשתמש בפורמט Markdown להפרדת פקודות, ונסדר כרונולוגית: מההגדרות, דרך יצירת בסיס, טריגר התנגשות, ועד פתרונות.
+
+## סעיף 1: הגדרה (כמו בפרקים 1-2)
+
+כרגיל, אני רץ את השרת במצב פיתוח עם עקיפת אימות (auth bypass). זה מקל על ניסויים, כי אין צורך להתחבר.
+
+**עבור Windows (PowerShell)**:
+1. הפעל סביבה:
+   ```
+   .venv/Scripts/Activate.ps1
+   ```
+2. התקן:
+   ```
+   pip install -r explore/requirements.txt
+   ```
+3. הרץ:
+   ```
+   ./dev.ps1
+   ```
+   (ברירות מחדל: DataDir='.', Dev=$true – תיקיית נתונים נוכחית, מצב פיתוח מופעל.)
+
+**עבור bash (macOS/Linux)**:
+1. צור והפעל סביבה:
+   ```
+   python -m venv .venv && source .venv/bin/activate
+   ```
+2. התקן:
+   ```
+   pip install -r explore/requirements.txt
+   ```
+3. תן הרשאות והרץ:
+   ```
+   chmod +x dev.sh && ./dev.sh
+   ```
+   (ברירות מחדל: -d . עם מצב פיתוח.)
+
+פתח את העורך: v2/index.html (מקומי) או http://localhost:5000/v2 (דרך שרת).
+
+**הסבר פינה קטנה**: מצב פיתוח (Dev) עוקף אימות כדי שתוכל להתמקד בקוד. בפרודקשן (ייצור), השתמש באימות אמיתי כדי להגן על נתונים.
+
+## סעיף 2: מונחים מרכזיים (מוסברים בבירור)
+
+לפני שניצור התנגשות, בוא נגדיר שלושה מונחים:
+- **גרסת הורה (Parent version)**: כשאתה שומר, הבקשה כוללת parentVersion – הגרסה שאתה מאמין שאתה עורך. זה עוזר לשרת לבדוק אם אתה מעודכן.
+- **hash בסיס (base_sha256)**: גם בבקשה, expected_base_sha256 – חישוב SHA-256 (אלגוריתם חתימה דיגיטלית) של טקסט ההורה. השרת משווה אותו להash השמור כדי לזהות מרוצים (races – שינויים בו זמנית).
+- **התנגשות 409 (409 conflict)**: אם שמירה אחרת קרתה מאז שטענת, או הhash שגוי, השרת מחזיר HTTP 409 (קוד שגיאה) עם תגובה שמסייעת לממשק להציג חלון מיזוג.
+
+**הסבר פינה קטנה**: למה גם גרסה וגם hash? הגרסה זה בדיקה מהירה "האם אני מאחור?". הhash חזק יותר – מונע מרוצי נתונים עדינים או הבדלי קידוד (כמו סוגי שורות חדשות ב-Windows לעומת Linux). SHA-256 זה אלגוריתם בטוח שמייצר חתימה ייחודית לטקסט – אם תו אחד משתנה, הhash משתנה לגמרי.
+
+## סעיף 3: יצירת גרסאות בסיס (פקודות מדויקות)
+
+ניצור שתי גרסאות בסיס כדי להכין להתנגשות. הרץ ב-DevTools Console (החלף doc).
+
+**קוד מלא**:
+```
+(async () => {
+  const doc = 'FolderName/Filename.opus'; // החלף
+  // v1: התחלתי
+  let r = await fetch('http://localhost:5000/transcripts/save', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({
+      doc, parentVersion: null, expected_base_sha256: '',
+      text: 'hello world',
+      words: [{ word: 'hello world' }]
+    })
+  }); console.log('v1', r.status, await r.clone().json());
+
+  // v2: שינוי קטן
+  const latest1 = await (await fetch(`http://localhost:5000/transcripts/latest?doc=${encodeURIComponent(doc)}`, { credentials: 'include' })).json();
+  r = await fetch('http://localhost:5000/transcripts/save', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
+    body: JSON.stringify({
+      doc, parentVersion: latest1.version, expected_base_sha256: latest1.base_sha256,
+      text: latest1.text + '!', words: [{ word: latest1.text + '!' }]
+    })
+  }); console.log('v2', r.status, await r.clone().json());
+})();
+```
+
+עכשיו, האחרונה היא v2.
+
+**הסבר פינה קטנה**: clone() משמש כדי לקרוא את התגובה פעמיים (status ו-json) בלי שגיאה. credentials: 'include' שולח עוגיות (cookies) לאימות.
+
+## סעיף 4: טריגר התנגשות 409
+
+נדמה מרוץ קלאסי: "מישהו אחר שמר גרסה חדשה בזמן שערכתי ישנה".
+
+**שלב A – תפוס את האחרונה הנוכחית**:
+```
+(async () => {
+  const doc = 'FolderName/Filename.opus';
+  window.latestBefore = await (await fetch(`http://localhost:5000/transcripts/latest?doc=${encodeURIComponent(doc)}`, { credentials: 'include' })).json();
+  console.log('latestBefore', window.latestBefore);
+})();
+```
+
+**שלב B – שמור שינוי "מישהו אחר" בשרת**:
+```
+(async () => {
+  const doc = 'FolderName/Filename.opus';
+  const latest = await (await fetch(`http://localhost:5000/transcripts/latest?doc=${encodeURIComponent(doc)}`, { credentials: 'include' })).json();
+  const newText = latest.text + ' [server edit]';
+  const r = await fetch('http://localhost:5000/transcripts/save', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
+    body: JSON.stringify({
+      doc, parentVersion: latest.version, expected_base_sha256: latest.base_sha256,
+      text: newText, words: [{ word: newText }]
+    })
+  }); console.log('server save', r.status, await r.clone().json());
+})();
+```
+
+**שלב C – נסה לשמור מהישן (מאחור)**:
+```
+(async () => {
+  const doc = 'FolderName/Filename.opus';
+  const parent = window.latestBefore; // בכוונה ישן
+  const myText = (parent.text || '') + ' [my local edit]';
+  const r = await fetch('http://localhost:5000/transcripts/save', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
+    body: JSON.stringify({
+      doc,
+      parentVersion: parent.version, // מאחור
+      expected_base_sha256: parent.base_sha256,
+      text: myText,
+      words: [{ word: myText }]
+    })
+  });
+  console.log('client save', r.status);
+  const body = await r.json().catch(() => ({}));
+  console.log('payload', body);
+})();
+```
+
+זה מחזיר 409 עם: reason ("version_conflict" או "hash_conflict"), latest, parent, diff_parent_to_latest, diff_parent_to_client.
+
+**הסבר פינה קטנה**: unified diff זה פורמט קריא להבדלים – כמו +++ added, --- removed. הממשק משתמש בזה לחלון מיזוג.
+
+## סעיף 5: חלון המיזוג (סיור בממשק)
+
+בממשק, על 409, פותח חלון עם:
+- “טען העדכנית” – זורק עריכות מקומיות, טוען אחרונה.
+- “מיזוג אוטומטי (בטא)” – אם אין חפיפה, ממזג ומשמר.
+- “סגור” – סוגר.
+
+על הצלחה, שומר ומעדכן תג גרסה.
+
+## סעיף 6: מתחת למכסה: אלגוריתם מיזוג אוטומטי (רמה גבוהה)
+
+ברמה פשוטה:
+- מחשב diffs: base→latest ו-base→client.
+- ממיר לרשימת עריכות עם offsets מוחלטים { start, end, ins }.
+- בודק חפיפות – אם עריכה מ-latest חופפת מ-client, זה התנגשות, מדלג.
+- אחרת, משלב ומחיל מימין לשמאל (מונע הזזות offsets).
+- שומר מול latest אמיתי.
+
+**איפה בקוד**: v2/ui/controls.js (409 ו-renderConflict), v2/ui/merge-modal.js; שרת: explore/app/routes/transcripts.py (409 payload).
+
+## סעיף 7: מקרי קצה ומלכודות
+
+- נורמליזציה: מנרמל שורות/תווים בלתי נראים להימנע משגיאות. אם העתקת ממקור מוזר, hashes עלולים להשתנות.
+- גבולות פסקאות: "\n" מגדיר – מיזוג חוצה מותר, אבל משפיע על יישור/ייצוא. נוסיף מגבלות בעתיד.
+- התנגשות hash בלבד: גרסה תואמת אבל hash לא – reason "hash_conflict". חלון מראה diffs.
+- diffs גדולים: off-thread, ווירטואלי. HUD (Ctrl+Alt+D) עוקב.
+
+## סעיף 8: הדרכה למיזוג ידני
+
+אם אוטומטי נכשל: טען אחרונה והחל מחדש; או הוסף ממשק 3-פאנלים (base, latest, local).
+
+**קוד**: v2/ui/merge-modal.js (חלון); v2/ui/controls.js (שמירה); שרת: transcripts.py.
+
+## סעיף 9: אימות פתרון ומעקב
+
+אחרי, תג גרסה מתעדכן. בדוק /transcripts/history, “הצג שכבות”, ייצוא עם &version=N.
+
+## סעיף 10: סיכום ומה הבא
+
+בדקנו hash gate, יצרנו 409, חקרנו payload, חקרנו אפשרויות מיזוג. הבא: אישורים ועבודות אמינות.
+
+**נספח A: העתק/הדבק**
+- אחרונה:
+  ```
+  (async () => {
+    const doc = 'FolderName/Filename.opus';
+    console.log(await (await fetch(`http://localhost:5000/transcripts/latest?doc=${encodeURIComponent(doc)}`, { credentials: 'include' })).json());
+  })();
+  ```
+- טריגר התנגשות:
+  ```
+  (async () => {
+    const doc = 'FolderName/Filename.opus';
+    const latest = await (await fetch(`http://localhost:5000/transcripts/latest?doc=${encodeURIComponent(doc)}`, { credentials: 'include' })).json();
+    const otherText = (latest.text || '') + ' server edit';
+    await fetch('http://localhost:5000/transcripts/save', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
+      body: JSON.stringify({
+        doc, parentVersion: latest.version, expected_base_sha256: latest.base_sha256,
+        text: otherText, words: [{ word: otherText }]
+      })
+    });
+    // שמירה ישנה
+    const parent = { version: latest.version, base_sha256: latest.base_sha256, text: latest.text };
+    const mine = (parent.text || '') + ' my local edit';
+    const r = await fetch('http://localhost:5000/transcripts/save', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
+      body: JSON.stringify({
+        doc, parentVersion: parent.version, expected_base_sha256: parent.base_sha256,
+        text: mine, words: [{ word: mine }]
+      })
+    });
+    console.log('status', r.status, 'payload', await r.json().catch(()=>({})));
+  })();
+  ```
+- ייצוא: http://localhost:5000/export/transcript/vtt?doc=<folder>/<file.opus>&version=<N>

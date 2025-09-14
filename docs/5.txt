@@ -1,0 +1,158 @@
+“Crowd‑Fix Podcasts — Episode 5: Exports & QA Workflows”
+Voiceover: Welcome back. Today we’ll convert your versioned transcripts to standard formats (WebVTT, CSV, JSON), pin exports to a specific version and hash, and show how to combine confirmations with exports for reviewers.
+What You’ll Learn
+
+Exporting a transcript as:
+WebVTT for video players/subtitle tools.
+CSV for spreadsheets/review workflows.
+JSON for programmatic processing.
+Pinning exports to a version (and why it matters).
+Basic QA checks: verifying times, segment breaks, and text integrity.
+Combining confirmations with exports for reviewer context.
+Prereqs (Dev Mode)
+
+Windows PowerShell:
+.venv/Scripts/Activate.ps1
+pip install -r explore/requirements.txt
+./dev.ps1
+bash/macOS/Linux:
+python -m venv .venv && source .venv/bin/activate
+pip install -r explore/requirements.txt
+chmod +x dev.sh && ./dev.sh
+Open the editor: v2/index.html (or http://localhost:5000/v2)
+Key Terms (brief refresher)
+
+Version: immutable snapshot after each successful save.
+base_sha256: SHA‑256 of that version’s text; confirms integrity.
+Segment: a run of tokens delimited by a newline token “\n”.
+Tokens: words/characters with timings; newline tokens mark boundaries.
+Virtualized rendering: draws only visible chunks, keeping the UI fast.
+Exports Overview
+
+Backend endpoints we’ll use:
+VTT: GET /export/transcript/vtt?doc=<doc>&version=<N>
+CSV: GET /export/transcript/csv?doc=<doc>&version=<N>
+JSON: GET /export/transcript/json?doc=<doc>&version=<N>
+If version is omitted, we export the latest. For reproducibility and QA, you should pin to a version whenever possible.
+Step 1 — Identify Your Document and Version
+
+In the editor, load an episode (browser panel on the right → click a folder → click a file).
+The version badge (גרסה …) shows the active version and short hash.
+Or fetch via API:
+DevTools Console:
+(async () => {
+const doc = 'FolderName/Filename.opus'; // replace
+const latest = await (await fetch(http://localhost:5000/transcripts/latest?doc=${encodeURIComponent(doc)}, { credentials: 'include' })).json();
+console.log(latest); // { version, base_sha256, text, words? }
+})();
+Step 2 — Export as WebVTT
+
+Why VTT: compatible with players/editors (VLC, web players) and easy to preview; carries segment timing and text.
+URL format:
+http://localhost:5000/export/transcript/vtt?doc=<folder>/<file.opus>&version=<N>
+Windows PowerShell (save to a file):
+Invoke-WebRequest "http://localhost:5000/export/transcript/vtt?doc=$( [uri]::EscapeDataString('FolderName/Filename.opus') )&version=1" -OutFile transcript.vtt
+bash:
+curl -s -o transcript.vtt "http://localhost:5000/export/transcript/vtt?doc=$(python - <<'PY'\nimport urllib.parse; print(urllib.parse.quote('FolderName/Filename.opus'))\nPY\n)&version=1"
+Tips:
+VTT header is “WEBVTT”. Each cue has start/end times as hh:mm:ss.mmm → hh:mm:ss.mmm plus the text.
+If your version has no token timings, times default to 0.0; the file still validates but won’t be useful for playback timing.
+Step 3 — Export as CSV
+
+Why CSV: easy for reviewers (Excel/Sheets), auditing segment text with timings.
+URL format:
+http://localhost:5000/export/transcript/csv?doc=<doc>&version=<N>
+Windows PowerShell:
+Invoke-WebRequest "http://localhost:5000/export/transcript/csv?doc=$( [uri]::EscapeDataString('FolderName/Filename.opus') )&version=1" -OutFile transcript.csv
+bash:
+curl -s -o transcript.csv "http://localhost:5000/export/transcript/csv?doc=$(python - <<'PY'\nimport urllib.parse; print(urllib.parse.quote('FolderName/Filename.opus'))\nPY\n)&version=1"
+Notes:
+The backend emits UTF‑8 with BOM to placate Excel.
+Columns: index,start,end,text (one row per segment).
+Segment detection is based on newline tokens (“\n”). Multiple consecutive newlines will yield short/empty segments; reviewers can filter these.
+Step 4 — Export as JSON
+
+Why JSON: programmatic; contains both text and words arrays (if available).
+URL format:
+http://localhost:5000/export/transcript/json?doc=<doc>&version=<N>
+Windows PowerShell:
+Invoke-WebRequest "http://localhost:5000/export/transcript/json?doc=$( [uri]::EscapeDataString('FolderName/Filename.opus') )&version=1" -OutFile transcript.json
+bash:
+curl -s -o transcript.json "http://localhost:5000/export/transcript/json?doc=$(python - <<'PY'\nimport urllib.parse; print(urllib.parse.quote('FolderName/Filename.opus'))\nPY\n)&version=1"
+Contents:
+{ doc, version, text, words }
+words comes from the normalized table if present; else from stored JSON; else we fallback to a single token containing the full text.
+Step 5 — Pinning Exports to a Version
+
+Why: You want exports to be reproducible and reviewable in context. Pinning avoids surprises if others save a new version.
+Find version:
+In the editor: check the badge (גרסה N).
+Or via: GET /transcripts/history?doc=…
+DevTools Console:
+(async () => {
+const doc = 'FolderName/Filename.opus';
+const hist = await (await fetch(http://localhost:5000/transcripts/history?doc=${encodeURIComponent(doc)}, { credentials: 'include' })).json();
+console.log(hist.map(h => ({v: h.version, parent: h.parent_version, hash: (h.hash||'').slice(0,8), at: h.created_at })));
+})();
+Step 6 — Basic QA Checks
+
+Open VTT in a player (e.g., VLC) to verify timing and line breaks.
+Open CSV in Excel/Sheets:
+Check that the first and last segments have sensible times (monotonic increase).
+Confirm there are no runaway empty segments unless expected.
+JSON sanity:
+Verify text.length equals the sum of token lengths (account for “\n” as single characters).
+If tokens contain no timings for some segments, that’s not a failure — alignment may be pending or intentionally omitted.
+Step 7 — Combining Confirmations with Exports
+
+Goal: Provide reviewers with both the text and a map of “verified” ranges.
+Get confirmations:
+GET /transcripts/confirmations?doc=<doc>&version=<N>
+DevTools Console (merge with JSON export):
+(async () => {
+const doc = 'FolderName/Filename.opus'; const version = 1; // pin
+const [j, c] = await Promise.all([
+fetch(http://localhost:5000/export/transcript/json?doc=${encodeURIComponent(doc)}&version=${version}, { credentials: 'include' }).then(r=>r.json()),
+fetch(http://localhost:5000/transcripts/confirmations?doc=${encodeURIComponent(doc)}&version=${version}, { credentials: 'include' }).then(r=>r.json())
+]);
+// Map confirmations onto text
+const text = j.text || '';
+const marks = (c || []).map(row => ({
+start: row.start_offset, end: row.end_offset,
+exact: row.exact, ok: text.slice(row.start_offset, row.end_offset) === row.exact
+}));
+console.table(marks);
+})();
+Reviewer handout idea:
+Export CSV for segments (timings + text).
+Export JSON to compute a “confirmed coverage” percentage (sum of confirmed lengths / text length).
+Optional: produce a “confirmed only” VTT by filtering segments whose ranges fully fall within confirmed spans (can script this externally).
+Edge Cases & Pitfalls
+
+Missing timings:
+VTT will still be well-formed but with 0.0 times; for a real subtitle track, align first.
+Newlines and segment boundaries:
+If a user inserted or removed newlines, segmentation can change across versions. Pin the version for reviews; “Show Layers” can help spot boundary changes between versions.
+RTL in CSV:
+Excel or Sheets should display RTL text fine; ensure the font supports your script. If alignment looks odd, change cell alignment to right.
+Very long text:
+Keep an eye on memory when opening JSON with large arrays; prefer CSV or segmented previews for reviewer use.
+Where This Lives in the Repo
+
+Backend exports: explore/app/routes/export.py
+VTT builder: _build_vtt() via _segments_from_words()
+CSV/JSON routes: /export/transcript/csv|json
+Segment derivation: tokens → segments by splitting on “\n”
+Words normalization preference:
+transcript_words table if present → preserves segment boundaries reliably
+Fallback to stored JSON words, then to full text as a single token
+Confirmations: explore/app/routes/transcripts.py (list + save)
+Frontend buttons:
+The VTT button (⬇️ VTT) in the editor triggers a local export for the current view; for version‑pinned exports, use the backend endpoints above.
+Optional: Reviewers via Docker
+
+If you want to ship a review bundle to a friend:
+docker build -t explore-app .
+PowerShell: docker run --rm -p 5000:5000 -e DATA_DIR=/data -v ${PWD}:/data explore-app
+bash: docker run --rm -p 5000:5000 -e DATA_DIR=/data -v $(pwd):/data explore-app
+Share link: http://localhost:5000/v2 and version‑pinned export URLs

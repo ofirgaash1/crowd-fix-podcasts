@@ -1,0 +1,129 @@
+ “Alignment Flows” — slow, thorough, and hands‑on. It explains what alignment is in this project, how the server handles it, how the UI triggers it, exact commands you can paste, expected responses and errors, and where the code lives. I’ll stop after this and wait for your approval before drafting Episode 8.
+
+Title Card
+
+On screen: “Crowd‑Fix Podcasts — Episode 7: Alignment Flows”
+Voiceover: Welcome back. Today we’ll focus on alignment — how we re‑compute token timings after edits using audio, how the UI triggers alignment, how to interpret responses, and how to audit the timing adjustments.
+Alignment: What/Why/Where
+What: Alignment re‑computes timestamps (start/end in seconds) for words around an edited segment, using the audio as ground truth.
+Why: After text edits, prior timings often drift. Re‑aligning a small neighborhood keeps timings useful for playback, karaoke, and exports.
+Where (important): In this project, alignment is server‑side only. We removed the in‑browser/WASM aligner. The backend slices audio with ffmpeg, calls an external align service, and records timing deltas as edit metadata.
+RTL Layout Reminder
+The UI is right‑to‑left:
+Browser (folders/files) on the right.
+Transcript editor in the center.
+Diff/History on the left.
+None of the alignment math depends on visual order; it uses logical text order and token sequences.
+Key Concepts, Clearly
+Tokens: Text is represented as a sequence of tokens; most tokens are words with optional start/end/probability. The newline token “\n” marks a segment boundary.
+Segments: Groups of tokens between newline tokens. Alignment focuses on a segment and its neighbors.
+Neighbor window: The backend aligns a window of segments [seg − neighbors … seg + neighbors]. We clamp neighbors to [0, 3] for safety.
+Hash/versions: Alignment runs against a specific transcript version (typically the latest right after save). Timing adjustments are recorded as metadata referencing that version pair.
+Storage of timing adjustments: The backend appends a “timing_adjust” block into transcript_edits.token_ops for the (parent_version → child_version) edge, so you can audit what changed.
+How the UI Triggers Alignment
+After you click “⬆️ שמור תיקון” (save), the editor:
+Computes/guesses the current caret’s segment index.
+Calls POST /transcripts/align_segment with doc, version, segment, and neighbors=1.
+Disables the save button temporarily (“מיישר תזמונים…”) and shows a toast about changed timings.
+This is done on the latest saved version; timing adjustments are recorded on the backend for audits.
+Data prerequisites (Audio + Transcripts)
+The align endpoint requires local audio to extract a small clip. The backend resolves audio at:
+<data_root>/audio/<folder>/<file>.opus
+or nested variants (it also tries to follow symlinks to blobs).
+Tip: Put your .opus under audio/<folder>/<file>.opus to keep it simple.
+Without audio, the endpoint returns 404 “audio not found”. That’s expected — add the audio to test alignment.
+Exact Alignment Calls (Copy/Paste)
+Step A — find your doc and latest version:
+DevTools Console:
+(async () => {
+const doc = 'FolderName/Filename.opus'; // replace with your actual
+const latest = await (await fetch(http://localhost:5000/transcripts/latest?doc=${encodeURIComponent(doc)}, { credentials: 'include' })).json();
+console.log('latest', latest); // { version, base_sha256, text, words? }
+})();
+Step B — pick a segment index N:
+If you know the approximate caret position (chars from start), the UI estimates segment by counting newline tokens. For testing, pick a small integer like 0 or 1.
+Step C — call the endpoint:
+DevTools Console:
+(async () => {
+const doc = 'FolderName/Filename.opus'; // replace
+const version = 1; // replace with your number
+const segment = 0; // try 0, 1, etc.
+const neighbors = 1; // clamped [0..3]
+const r = await fetch('http://localhost:5000/transcripts/align_segment', {
+method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
+body: JSON.stringify({ doc, version, segment, neighbors })
+});
+console.log('status', r.status);
+console.log('json', await r.clone().json());
+})();
+Expected Responses (Happy Path & Fallbacks)
+Happy path (clip extracted, align service OK):
+{ ok: true, changed_count: <N>, total_compared: <M> }
+changed_count is the number of words whose timings changed beyond a tiny epsilon.
+No words in that window:
+{ ok: false, reason: "no-words" }
+This happens if the normalized words table has no entries for that area. Save a version with words or backfill words for that version first.
+Words present but no usable timings in the window:
+{ ok: false, reason: "no-timings" }
+Add or preserve timings around at least the anchors (often the neighboring segments) so the slice time window can be computed.
+Audio missing:
+HTTP 404 “audio not found” — place the .opus at audio/<folder>/<file>.opus.
+ffmpeg error (rare):
+HTTP 500 with an error body if ffmpeg fails to produce the clip.
+External align service error:
+HTTP 502 with either “align request failed: …” or “align endpoint error: …”
+Auditing Recorded Adjustments
+After a successful alignment, the backend appends a block to transcript_edits.token_ops for the parent→child version link, with shape:
+{
+type: "timing_adjust",
+segment_start, segment_end,
+clip_start, clip_end,
+items: [ { word, old_start, old_end, new_start, new_end, delta_start, delta_end, segment_index }, ... ],
+service: "silence-remover"
+}
+You can fetch these via:
+GET /transcripts/edits?doc=<doc>
+DevTools Console:
+(async () => {
+const doc = 'FolderName/Filename.opus';
+const edits = await (await fetch(http://localhost:5000/transcripts/edits?doc=${encodeURIComponent(doc)}, { credentials: 'include' })).json();
+console.log(edits); // [{ parent_version, child_version, dmp_patch, token_ops }, ...]
+})();
+This gives you a durable audit trail showing which tokens changed and by how much in time.
+How Segment Window Is Determined
+neighbors is clamped: 0..3.
+The backend queries transcript_words for segment_index in [seg − neighbors … seg + neighbors] ordered by word_index.
+It then computes the time span from the min start to the max end across these words (clip_start..clip_end), and extracts a short WAV via ffmpeg with a small pad (±0.10s).
+The external aligner returns per-word timings in the clip; we map them back to absolute times by adding the clip start offset.
+Troubleshooting & Edge Cases
+“no-words”: The normalized table for that version has no rows in the requested window. Ensure your save stored a non‑empty words array, or backfill normalized words from stored JSON (e.g., via a migration endpoint/CLI).
+“no-timings”: Words exist but all have missing start/end. The clip time window can’t be determined. Provide timings at least for anchors around the edit.
+Audio not found: Ensure path resolution matches <AUDIO_DIR>/<folder>/<file>.opus. In dev, AUDIO_DIR is <DATA_DIR>/audio.
+Massive segments or dense edits: Try neighbors=2 or 3 (still clamped to 3) to give the aligner more context.
+Performance & UX Notes
+The frontend virtualizer handles large text; alignment runs server‑side and is decoupled from UI painting.
+After save, we run align on a small window only; UI shows a toast with how many timings changed.
+Exports (VTT/CSV) will reflect stored words and/or timing metadata depending on your pipeline. If you want alignment to also update the normalized words, we can extend the endpoint to write adjusted times back into transcript_words (right now we record adjustments as audit metadata).
+Where the Code Lives
+Backend alignment route:
+explore/app/routes/transcripts.py:
+@bp.route('/align_segment', methods=['POST'])
+Neighbor clamping (0..3), time window extraction, ffmpeg invocation, external HTTP call, and token_ops update.
+Audio path resolution:
+explore/app/utils.py: resolve_audio_path() — searches in <AUDIO_DIR> for <folder>/<file>.opus and follows links if needed.
+Frontend alignment trigger:
+v2/ui/controls.js: after save, estimateSegmentIndex(); then call alignSegment(doc, version, segment, neighbors=1); update UI toasts.
+Edits log:
+explore/app/routes/transcripts.py: transcript_edits table; token_ops JSON updated with each timing_adjust block.
+GET /transcripts/edits?doc=… to inspect.
+Practical Test Scenarios
+Happy path:
+Ensure audio/<folder>/<file>.opus exists.
+Save v1 with words having at least some timings in the target neighborhood.
+Call /transcripts/align_segment with neighbors=1; expect ok:true with changed_count > 0; verify /transcripts/edits shows timing_adjust items.
+No words:
+Save a version with empty words []; align → ok:false, reason:"no-words".
+No timings:
+Save with words but remove start/end in that segment window; align → ok:false, reason:"no-timings".
+Audio error:
+Temporarily move/rename the .opus; align → 404 “audio not found”.

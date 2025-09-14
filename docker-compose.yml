@@ -1,0 +1,20 @@
+version: "3.9"
+
+services:
+  explore:
+    build: .
+    ports:
+      - "5000:5000"
+    environment:
+      # Data root mounted below
+      DATA_DIR: /data
+      # Dev settings: bypass auth and enable debug flows in run.py
+      FLASK_ENV: development
+      TS_USER_EMAIL: dev@example.com
+    volumes:
+      # Live-reload code and static files
+      - ./:/app
+      # Mount data (audio/json) under /data for the backend to use
+      - ./:/data
+    command: ["python", "explore/run.py", "--data-dir", "/data", "--dev"]
+

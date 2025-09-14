@@ -1,0 +1,166 @@
+ “Crowd‑Fix Podcasts — Episode 6: Search & Index”
+Voiceover: Welcome back. Today we’ll build the transcript index, run searches, understand how hits map to segments and time ranges, and learn where the code lives so you can tweak behavior or debug performance.
+What You’ll Learn
+
+Build the documents/segments index from json/.
+Use the reindex and stats CLI commands.
+Call the search route and page through results.
+Map search hits to segments and timestamps.
+Understand schema, performance tradeoffs, and RTL considerations.
+Where to find the relevant code.
+Setup (Dev Mode)
+
+Windows PowerShell:
+.venv/Scripts/Activate.ps1
+pip install -r explore/requirements.txt
+./dev.ps1
+bash/macOS/Linux:
+python -m venv .venv && source .venv/bin/activate
+pip install -r explore/requirements.txt
+chmod +x dev.sh && ./dev.sh
+Open editor at v2/index.html or http://localhost:5000/v2 (RTL layout: browser on right, editor center, diff/history left).
+Core Concepts (Search & Index)
+
+Data sources:
+We compile a local index from json/…/full_transcript.json.gz (or flat json). Audio is not required for indexing or search.
+Index schema (SQLite):
+documents(doc_id, source, episode, full_text)
+segments(doc_id, segment_id, segment_text, avg_logprob, char_offset, start_time, end_time)
+char_offset:
+Absolute character position in the full_text for where a segment begins (we insert a space when concatenating segments, so char_offset includes that).
+Segment timing:
+start_time, end_time provide seconds for the segment window; used for navigation and audio scrubbing.
+Search strategy:
+Simple pattern search for now (SQL LIKE + a SQLite UDF match_offsets() to compute character offsets). Good for quick local workflows and languages like Hebrew.
+Build the Index (CLI)
+
+Reindex from transcripts under json/:
+Windows PowerShell:
+python -m explore.app.cli reindex --data-dir .
+bash:
+python -m explore.app.cli reindex --data-dir .
+Output:
+Creates (or overwrites) <data_root>/explore-index.db.
+Loads each full_transcript.json.gz, converts it to a single full_text with segments, and bulk-inserts into SQLite.
+Check Index Stats (CLI)
+
+Print counts and samples:
+python -m explore.app.cli stats --db explore-index.db
+You’ll see counts and a few sample rows for quick sanity.
+Search from the Backend Route (JSON)
+
+The editor’s search tab calls the /search route. You can call it directly too:
+DevTools Console (replace q with your query; respects pagination):
+(async () => {
+const q = 'שלום'; // example RTL term
+const page = 1; // 1-based
+const r = await fetch(http://localhost:5000/search?q=${encodeURIComponent(q)}&page=${page}, {
+headers: { 'Accept': 'application/json' },
+credentials: 'include'
+});
+const { results, pagination } = await r.json();
+console.log('page', pagination.page, '/', pagination.total_pages);
+console.table(results);
+})();
+Fields:
+episode_idx: doc_id for the hit
+char_offset: where in full_text the hit occurs
+source: path/id of the episode
+segment_idx, start_sec, end_sec: segment metadata for navigation
+Load Snippets for Hits (UI behavior)
+
+In the UI, after the first results page arrives, the app asks for small segment‑text snippets for each hit (so you can judge relevance). You’ll see the snippet list under the search results. Paging buttons will request the next/previous page via /search again.
+Open a Hit in the Editor (End-to-End)
+
+Click the hit: the app loads the episode via /episode?folder=…&file=… and sets up the player and transcript editor.
+The editor will try to seek to the time near start_sec, and auto‑scroll to the nearest word to align the view. If words aren’t yet loaded for that region, the UI retries a few times as words stream in.
+Edge Cases & Tuning
+
+Empty dataset:
+If json/ has no transcripts, reindex prints “No transcripts found”. The /folders and /files routes may still derive items from whatever structure exists.
+Unicode/RTL:
+Searching uses LIKE and a UDF that escapes and then finds offsets. If you see unexpected behavior with diacritics or zero‑width marks, check normalization in your source transcripts.
+Long files:
+The indexer reads gz JSON and emits full_text with a single space between segments. char_offset counts characters in that concatenation. If offsets seem off by one, check for leading/trailing spaces or consecutive newlines in the source segments.
+Performance:
+Indexing uses a small thread pool and batch inserts. On spinning disks or network drives, indexing can be I/O bound; do it once, reuse the DB.
+Searching is fast for typical queries. For massive corpora, consider a full‑text engine or FTS5; the schema makes that a natural upgrade.
+Exact API: /search with Paging
+
+Accept header “application/json” is required to get JSON:
+(async () => {
+const q = 'דוגמה';
+const page = 1, perPage = 100; // perPage is managed server-side; page is 1-based
+const r = await fetch(http://localhost:5000/search?q=${encodeURIComponent(q)}&page=${page}, {
+headers: { 'Accept': 'application/json' },
+credentials: 'include'
+});
+const j = await r.json();
+console.log(j.pagination);
+console.table(j.results);
+})();
+The HTML view at /search will render results server-side, but for programmatic access always send the Accept header.
+Map (episode_idx, char_offset) to a Segment (Conceptual)
+
+The backend computes segment_for_hit() by looking up the segment whose char_offset ≤ hit.char_offset:
+This finds the segment that contains the hit.
+That gives a segment_idx and start_time/end_time for fast navigation.
+In code:
+explore/app/services/index.py: segment_for_hit() and schema setup.
+explore/app/services/search.py: SearchService; mapping hits to segments.
+explore/app/routes/main.py: /search; enriches hits with segment info.
+Read the Index in SQLite (Optional)
+
+Sanity checks you can do with DB Browser or sqlite3:
+.tables
+SELECT COUNT(*) FROM documents;
+SELECT COUNT(*) FROM segments;
+SELECT * FROM documents LIMIT 3;
+SELECT * FROM segments WHERE doc_id=1 ORDER BY segment_id LIMIT 5;
+How the Frontend Uses This
+
+v2/data/search.js:
+search(): calls /search with the query and page.
+fetchSegments(): fetches text snippets for results (batch).
+resultToEpisode(): translates a result record to a folder/file to open via /episode.
+v2/main.js:
+“Search” tab wiring, paging buttons, keyboard navigation (↑/↓/Enter to open).
+On open, the app loads the episode and tries to focus the nearest word to the hit time.
+Practical Tips
+
+Right‑to‑left terms:
+Use a consistent normalized form (NFC) in your source JSON. The indexer preserves your Unicode but normalizes within UI flows to minimize false mismatches.
+Big text:
+The editor virtualizes the transcript view; searching and navigating a big hit list remains smooth. Toggle the HUD (Ctrl+Alt+D) to see the rendering stats during heavy scrolling.
+QA flow:
+Use search to jump quickly to problem phrases. Confirm fixed spans (Episode 4), and export that version for reviewers (Episode 5).
+Commands Recap (Copy/Paste)
+
+Reindex:
+python -m explore.app.cli reindex --data-dir .
+Stats:
+python -m explore.app.cli stats --db explore-index.db
+Search (JSON):
+(async () => {
+const q = 'שלום', page = 1;
+const r = await fetch(http://localhost:5000/search?q=${encodeURIComponent(q)}&page=${page}, {
+headers: { 'Accept': 'application/json' }, credentials: 'include'
+});
+console.log(await r.json());
+})();
+Where Things Live (Code Pointers)
+
+Index building:
+explore/app/services/index.py
+_setup_schema(): creates tables and indexes if missing.
+_build(): reads transcripts, composes full_text, and inserts documents/segments.
+get_segment_at_offset(): fast lookup for a hit’s segment.
+Search service:
+explore/app/services/search.py
+Query logic and hit→segment enrichment.
+Search route:
+explore/app/routes/main.py (/search)
+Paginates hits and returns JSON when requested.
+Frontend:
+v2/data/search.js: fetch/search helpers and normalization
+v2/main.js: Search tab and navigation (enter to open, arrows to move)

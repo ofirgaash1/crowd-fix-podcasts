@@ -1,0 +1,139 @@
+ “Crowd‑Fix Podcasts — Episode 10: Performance & Observability”
+Voiceover: Welcome back. Today we’ll keep the editor smooth and responsive at scale. We’ll measure, tune, and verify performance in a deliberate way: rendering, diffing, memory, and alignment latency. We’ll also set realistic budgets and show exactly where to look in the code.
+Goals and Mindset
+Voiceover: Performance means two things here:
+Rendering: the transcript stays smooth at 60 fps, even for very long text (200k+ characters).
+Responsiveness: interactions (edit, save, scroll, search, diff) remain snappy with predictable latency.
+Voiceover: We’ll use DevTools, the built-in HUD, and a worst-case synthetic loader to stress test. We’ll also talk about common pitfalls (forced reflow, over-paint, GC churn) and how to avoid them.
+Setup (Dev Mode)
+Windows PowerShell:
+.venv\Scripts\Activate.ps1
+pip install -r explore/requirements.txt
+./dev.ps1
+bash/macOS/Linux:
+python -m venv .venv && source .venv/bin/activate
+pip install -r explore/requirements.txt
+chmod +x dev.sh && ./dev.sh
+Open: v2/index.html (or http://localhost:5000/v2). Remember: RTL — browser panel on the right, transcript in the center, diff/history on the left.
+The HUD (What it shows, why it matters)
+Voiceover: Toggle the dev HUD with Ctrl+Alt+D.
+HUD fields:
+visible / total: number of spans currently rendered vs. total tokens.
+render: last render time in ms (either a window-only update or a full render).
+Voiceover: Under normal use, render times should typically be under ~8–12 ms for window updates. A full initial render may spike higher but should settle.
+Synthetic Worst-Case Loader (Stress test)
+Voiceover: The build includes a helper to simulate a huge transcript. Open DevTools Console and run:
+__loadWorstCase(200000)
+Voiceover: This creates ~200k tokens (with occasional “\n”), loads them into the store, and updates the HUD. Scroll. Watch visible/total and render time.
+Performance budget:
+Smooth scroll at 60 fps (no long stutters).
+Window update render ≤ 12 ms typical; occasional spikes acceptable.
+Diff Worker and Determinism (Performance sanity)
+Voiceover: Diffs run off the main thread. To sanity-check performance and stability:
+Use the console helper:
+__diff('hello world', 'hello brave new world')
+It logs diffs and verifies that reconstructing “new” and “old” from those diffs matches exactly.
+Budget guidance:
+“Medium” diffs: < 100 ms off-thread (UI stays responsive).
+“Large” diffs (pages of text): still off-thread; aim under ~200–300 ms. Rare spikes are OK as long as the main thread stays free.
+DevTools Performance Profiling (Hands-on)
+Voiceover: We’ll do two recordings: scroll and edit.
+Scroll profile:
+Open DevTools → Performance panel.
+Click “Record”, then scroll the transcript panel steadily for ~5 seconds, then “Stop”.
+Inspect:
+Main thread: look for long “recalculate style” or “layout” bars (>16 ms).
+Scripting: bursts should be small; no repeated expensive DOM queries in tight loops.
+Painting: stable; no repeated full reflows on every scroll tick.
+Edit profile:
+In transcript, type a few characters; stop.
+Inspect:
+“input” → small burst of scripting, DOM update; no long synchronous diffing (diff runs off-thread).
+No large GC pauses triggered by small edits.
+Memory Profiling (Watch for churn)
+Voiceover: DevTools → Memory panel.
+Take a snapshot after loading worst-case tokens.
+Scroll aggressively for 10–20 seconds.
+Take another snapshot.
+Compare: live node count should remain relatively stable; some ephemeral nodes are fine. A steady upward crawl suggests a leak.
+Shotgun tip:
+The virtualizer recycles window content; if you add custom DOM in a plugin, ensure it’s detached on window updates.
+Tuning Knobs (Exactly where and how)
+Virtualizer window size and overscan:
+File: v2/render/overlay.js
+Defaults (constructor):
+windowSize ~ 800 tokens (center window — not DOM nodes, logical tokens)
+overscan ~ 300 (buffer above/below to reduce edge flicker)
+Effect: Larger windows reduce re-renders while scrolling but increase DOM nodes; adjust if you’re seeing frequent small reflows.
+Probability highlighting:
+Toggling it costs a small repaint (background color updates).
+If a dataset enables it by default, measure render time. In general, keep it off by default for very large transcripts unless needed.
+Text size:
+Larger fonts increase layout work. Use the A+/A− buttons to test real-world extremes.
+DOM structure:
+Avoid adding nested wrappers inside word spans at runtime. Keep tokens as simple spans with minimal attributes.
+Common Pitfalls (And fixes)
+Forced reflow/layout thrash:
+Avoid reading layout values (e.g., offsetWidth) immediately after style writes in the same tick. Batch reads then writes.
+Live Node churn:
+Don’t recreate the entire transcript DOM on every small change. The virtualizer already updates only the window pane — leverage that.
+Synchronous heavy work on input:
+Keep heavy tasks off the main thread (diff is already off-thread).
+Debounce or schedule small tasks with requestAnimationFrame to keep input pipeline free.
+Unbounded overlays:
+Debug UI layers (like temporary highlights) should be scoped to the window, not the entire transcript.
+Monitoring Endpoints (latency)
+Voiceover: Measure backend responsiveness in DevTools → Network.
+Save flow: /transcripts/save should be fast (tens of ms locally; network adds some).
+Words windowing: /transcripts/words?doc=…&version=…&segment=…&count=… — quick, thanks to normalized reads when available.
+History: /transcripts/history — small payload; quick.
+Align: /transcripts/align_segment — naturally slower due to ffmpeg and external align service; look for seconds, not ms.
+PostHog/Analytics (Optional)
+Voiceover: If you enable analytics (POSTHOG_API_KEY/POSTHOG_HOST), keep events minimal in production:
+Save, conflict, confirmation events are valuable.
+Avoid high-frequency scroll events; that adds cost and noise.
+DISABLE_ANALYTICS=true to fully disable.
+Practical Budgets (Working targets)
+Rendering:
+Window update: ≤ 12 ms typical; ≤ 16 ms 95th percentile.
+Initial full paint: under 500 ms for medium documents; larger on worst-case synthetic loads is OK as long as it stabilizes.
+Interaction:
+Keypress-to-paint: ≤ 50 ms typical for small edits.
+Save round-trip: ≤ 300 ms on local dev; depends on network in prod.
+Diff:
+Medium: < 100 ms off-thread; large: < 300 ms off-thread. Main thread must stay responsive.
+Align:
+Neighbor window align: sub-second to a few seconds depending on clip size and external service; always off the UI critical path.
+Quick “Smoke” Drill (Copy/paste)
+Load worst-case data:
+__loadWorstCase(200000)
+Toggle HUD:
+Ctrl+Alt+D (ensure updates while scrolling)
+Small edit:
+Type a few characters; ensure no visible jank.
+Save and align:
+Click “⬆️ שמור תיקון”
+Observe the temporary “מיישר תזמונים…” state; a toast will indicate changed timings or no changes.
+Measure:
+DevTools Performance recording while scrolling.
+Where to Look in Code (Recap)
+Virtualizer:
+v2/render/virtualizer.js (window tracking, stats)
+v2/render/overlay.js (windowed render, pre/window/post nodes, repaint logic)
+HUD:
+v2/ui/hud.js (reads virtualizer stats; updates during scroll via rAF)
+Diff worker:
+v2/workers/diff-worker.js and v2/workers/diff-core.js (deterministic, off-thread; exposed console helper __diff)
+Editor wiring:
+v2/main.js (hooks, dev helpers like __loadWorstCase and __diff)
+Performance Triage Tips (When something is slow)
+Reproduce with __loadWorstCase and HUD visible.
+Profile scroll and edit separately to isolate the cause.
+If render time spikes:
+Reduce window size or overscan slightly; confirm impact.
+Check any custom plugins/widgets added on top of word spans.
+If diff feels laggy:
+Check worker status; ensure no main-thread sync fallback got triggered.
+Test text normalization (no pathological inputs like huge single-line blobs if you can avoid them).
+If memory grows over time:
+Snapshots before/after long scrolls; ensure window-only rendering is in effect; check for references held outside the window renderer.

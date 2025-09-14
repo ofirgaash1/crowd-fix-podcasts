@@ -1,0 +1,153 @@
+“Crowd‑Fix Podcasts — Episode 8: Auth & Deployment”
+Voiceover: Today we’ll wire up authentication for real users and deploy the stack. We’ll cover dev bypass vs. Google OAuth, environment variables, CORS and cookies, Docker and Compose, reverse proxy, and security hardening.
+Goals
+
+Run with dev bypass for demos.
+Configure Google OAuth (Authlib) for real login.
+Serve the editor statically at /v2 from the backend.
+Ship with Docker or Docker Compose behind a reverse proxy over HTTPS.
+Understand CORS and cookie requirements for production.
+Auth Modes
+
+Dev bypass:
+Purpose: zero‑friction demos.
+Set FLASK_ENV=development and TS_USER_EMAIL=<you@example.com>.
+Any request hitting a @login_required route gets session['user_email'] = TS_USER_EMAIL.
+Google OAuth (Authlib preferred):
+Purpose: real multi-user auth.
+Needs GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET.
+Flow: /login → /authorize → Google → /login/authorized → set session['user_email'].
+Where Code Lives
+
+Backend auth routes: explore/app/routes/auth.py
+Prefers Authlib (OpenID Connect). Falls back to flask-oauthlib if Authlib absent.
+App bootstrap: explore/app/__init__.py
+Initializes OAuth only if creds are present (or non‑dev).
+Serves /v2 static via the frontend_static blueprint.
+Frontend 401 handling: v2/data/api.js
+On 401, shows a toast and redirects to <EXPLORE_API_BASE>/login.
+Dev Bypass (local)
+
+Windows PowerShell:
+.venv\Scripts\Activate.ps1
+pip install -r explore/requirements.txt
+setx FLASK_ENV development
+setx TS_USER_EMAIL you@example.com
+./dev.ps1
+Bash/macOS/Linux:
+python -m venv .venv && source .venv/bin/activate
+pip install -r explore/requirements.txt
+export FLASK_ENV=development TS_USER_EMAIL=you@example.com
+./dev.sh
+Open: v2/index.html (file://) or http://localhost:5000/v2.
+Google OAuth Setup (Authlib)
+
+Create Google OAuth Client:
+Go to Google Cloud Console → Credentials → Create OAuth client ID.
+Authorized redirect URI: http://localhost:5000/login/authorized (dev), and your production https://your.domain/login/authorized.
+Note client ID/secret.
+Configure env vars:
+GOOGLE_CLIENT_ID=<id>
+GOOGLE_CLIENT_SECRET=<secret>
+Optional analytics: POSTHOG_API_KEY, POSTHOG_HOST, or DISABLE_ANALYTICS=true.
+SECRET_KEY=<random-32bytes> for Flask session encryption.
+Run with real login (dev):
+PowerShell: setx GOOGLE_CLIENT_ID ... setx GOOGLE_CLIENT_SECRET ... then ./dev.ps1
+Bash: export GOOGLE_CLIENT_ID=... GOOGLE_CLIENT_SECRET=... && ./dev.sh
+Test:
+Visit http://localhost:5000/login
+Complete Google flow → redirected to next URL → session['user_email'] set.
+CORS & Cookies (production)
+
+Frontend uses credentials: 'include'; CORS must allow credentials and exact origin.
+Backend headers to set (already added broadly in code; tighten for prod):
+Access-Control-Allow-Credentials: true
+Access-Control-Allow-Origin: https://your.frontend.domain (not *)
+Cookies:
+Ensure SECRET_KEY is strong.
+Behind TLS, configure session cookie as Secure and SameSite=Lax or None if cross-site hosting is required.
+If serving /v2 from the same backend origin (recommended), CORS frictions disappear and cookies are first‑party.
+Docker (prod service)
+
+Build:
+docker build -t explore-app .
+Run with data mounted at /data and OAuth env:
+PowerShell:
+docker run --rm -p 5000:5000 -e DATA_DIR=/data -e GOOGLE_CLIENT_ID=... -e GOOGLE_CLIENT_SECRET=... -e SECRET_KEY=... -v ${PWD}:/data explore-app
+Bash:
+docker run --rm -p 5000:5000 -e DATA_DIR=/data -e GOOGLE_CLIENT_ID=... -e GOOGLE_CLIENT_SECRET=... -e SECRET_KEY=... -v $(pwd):/data explore-app
+Open: http://localhost:5000/v2
+Docker Compose (dev live-reload)
+
+docker compose build
+docker compose up
+Serves http://localhost:5000/v2
+Mounts repo as code + data (live reload), FLASK_ENV=development, dev auth bypass in the provided compose.
+Reverse Proxy (Nginx)
+
+Minimal TLS reverse proxy sample:
+Nginx server block (concept):
+server_name your.domain;
+listen 443 ssl;
+ssl_certificate /etc/letsencrypt/live/your.domain/fullchain.pem;
+ssl_certificate_key /etc/letsencrypt/live/your.domain/privkey.pem;
+location / { proxy_pass http://127.0.0.1:5000; proxy_set_header Host $host; proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for; proxy_set_header X-Forwarded-Proto https; }
+If front/back are on different domains:
+Set Access-Control-Allow-Origin to the exact frontend origin.
+Ensure cookies have Secure flag and proper SameSite.
+Static Editor at /v2
+
+The backend serves the SPA at /v2:
+GET /v2 → v2/index.html
+GET /v2/<asset> served from repo’s v2/ directory.
+For production performance, consider caching static assets via reverse proxy.
+Health & Observability
+
+Simple health: GET /folders or GET /files?folder=… acts as a liveness check.
+Logs:
+Gunicorn (Docker default) logs access/error to stdout/stderr.
+Analytics (optional):
+PostHog controlled by POSTHOG_API_KEY and DISABLE_ANALYTICS. Keep off in sensitive environments.
+Security Checklist (prod)
+
+HTTPS only via reverse proxy.
+SECRET_KEY set and rotated.
+OAuth secrets stored as env vars or secrets manager (not in repo).
+CORS restricted to exact frontend origin if hosting separately.
+Access-Control-Allow-Credentials: true only when necessary.
+Cookie flags: Secure under TLS; SameSite=Lax for same-site; None only when absolutely needed across sites.
+Edge Cases
+
+Dev bypass unexpectedly active:
+Confirm FLASK_ENV isn’t accidentally set to development in production.
+401 loops:
+Ensure OAuth client redirect URI exactly matches /login/authorized.
+Time skew or cookie issues can cause redirect loops; verify domain/HTTPS consistency.
+Cross‑origin SPA hosting:
+Prefer serving /v2 from the same origin (/v2 on backend) to avoid CORS/cookies complexity.
+Where Things Live (recap)
+
+Auth routes (Authlib/OAuth): explore/app/routes/auth.py
+App wiring + static /v2: explore/app/__init__.py
+Dockerfile: gunicorn server, ffmpeg installed for alignment.
+docker-compose.yml: dev‑mode live reload and dev bypass.
+Frontend 401 redirect: v2/data/api.js
+Demo Script (copy/paste)
+
+Dev bypass + run:
+PowerShell:
+setx FLASK_ENV development
+setx TS_USER_EMAIL you@example.com
+./dev.ps1
+Bash:
+export FLASK_ENV=development TS_USER_EMAIL=you@example.com
+./dev.sh
+Google OAuth (dev):
+PowerShell:
+setx GOOGLE_CLIENT_ID <id>
+setx GOOGLE_CLIENT_SECRET <secret>
+./dev.ps1
+Bash:
+export GOOGLE_CLIENT_ID=<id> GOOGLE_CLIENT_SECRET=<secret>
+./dev.sh
+Open http://localhost:5000/login, complete Google flow, then browse to /v2.

@@ -1,0 +1,294 @@
+# Crowd-Fix Podcasts – פרק 4: אישורים מעמיקים + ייצוא ועבודות בדיקת איכות (QA)
+
+ברוכים הבאים חזרה לסדרת הפודקאסטים "Crowd-Fix Podcasts"! בפרק הזה, שמאחד שני נושאים קשורים (אישורים ועבודות QA), נעמיק באישורים: מה הם, איך בחירה הופכת ל-offsets יציבים, איך hashes עוגנים אותם לגרסה הנכונה, מקרי קצה, ואיך לבדוק ולייצא. אחר כך, נעבור לייצוא תמלילים לפורמטים סטנדרטיים (WebVTT, CSV, JSON), קיבוע ייצוא לגרסה ספציפית, ובדיקות QA בסיסיות. נשלב אישורים עם ייצוא כדי לתת הקשר לבודקים. נתקדם לאט, עם הסברים מפורטים, כולל פינות קטנות כמו איך offsets עובדים ב-RTL (שם הבחירה ויזואלית אבל offsets לוגיים), ולמה אישורים "עוגנים" (anchored) לגרסה – כדי למנוע שינויים לא רצויים.
+
+אם אתה חדש, "אישור" (confirmation) זה סימון קטע טקסט כ"אמין" – כמו טיק בלוח. נשתמש בפורמט Markdown להפרדת פקודות, ונסדר כרונולוגית: מההגדרות, דרך זרימת UI, API מדויקים, ידיים על, מקרי קצה, ועד ייצוא ושילוב.
+
+## סעיף 1: מהם אישורים
+
+**אישורים (Confirmations)**: קטעי טקסט קטנים "עוגנים" (anchored) לגרסה ספציפית ו-hash שלה. 
+- **מטרה**: לסמן חלקים אמינים לבדיקת איכות (QA), אימון מודלים, או ייצוא מאוחר.
+- **עיגון**: מספר גרסה + base_sha256 של טקסט הגרסה. אם הטקסט משתנה, צריך לבנות עיגונים מחדש.
+- **הסבר פינה קטנה**: למה עיגון? כי טקסט יכול להשתנות – האישור "נצמד" לגרסה ספציפית, כמו תמונה שמצביעה על נקודה בזמן, כדי שלא תתבלבל אם עורכים אחר כך.
+
+## סעיף 2: זרימת UI (תזכורת RTL)
+
+מבנה RTL: פאנל דפדפן ימין, עורך אמצע, Diff/History שמאל.
+- **פעולות**: בחר טווח בתמליל (גרור, או Shift+חץ). לחץ “✅ אשר קטע מסומן” לאישור; “❎ בטל אישור” להסרה.
+- האפליקציה שומרת בשרת, טוענת מחדש, ומסמנת את הטווחים.
+
+**הסבר פינה קטנה**: RTL משפיע על בחירה ויזואלית (הגרירה מימין), אבל offsets (מיקומים) הם לוגיים – סופרים תווים מההתחלה, לא ויזואלית.
+
+## סעיף 3: מונחים מרכזיים
+
+- **Offsets**: העורך הופך בחירה ל-offsets מוחלטים [start, end] מול הטקסט החי. 
+- **קנוניזציה (Canonicalization)**: לפני hash/עיגון, מנרמלים טקסט (שורות, non-breaking space, תווים בלתי נראים) למניעת התנגשויות שווא.
+- **Hash gate**: אישורים נשמרים רק אם base_sha256 תואם את השרת. עריכות לא שמורות? UI שומר קודם ל-hash יציב.
+- **סמנטיקת החלפה**: השרת מחליף את כל האישורים הקיימים ל-doc+version בעסקה אחת (clear+insert).
+
+**הסבר פינה קטנה**: offsets זה כמו מד סנטימטרים – start=0 זה ההתחלה, end=5 זה 5 תווים. קנוניזציה מונעת ששורה ב-Windows (CRLF) תיראה שונה מ-Linux (LF).
+
+## סעיף 4: API מדויקים
+
+- **רשימת אישורים**: GET /transcripts/confirmations?doc=<folder>/<file.opus>&version=<N>
+- **שמירת אישורים**: POST /transcripts/confirmations/save
+  - Payload: { doc, version, base_sha256, items: [ { start_offset, end_offset, prefix, exact, suffix }, ... ] }
+  - תנאים: version קיים, base_sha256 תואם (hash gate), items זה הכל (מקיים ישנים).
+
+**הסבר פינה קטנה**: prefix/exact/suffix זה הקשר – prefix זה לפני הקטע, exact הקטע עצמו, suffix אחרי. שומר על דיוק אם הטקסט משתנה מעט.
+
+## סעיף 5: ידיים על: נתונים מינימליים + שמירת אישורים (העתק/הדבק)
+
+**צור v1 (שמירה ראשונה)**:
+```
+(async () => {
+  const doc = 'FolderName/Filename.opus';
+  const text = 'שלום עולם'; // דוגמה RTL
+  const r = await fetch('http://localhost:5000/transcripts/save', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
+    body: JSON.stringify({ doc, parentVersion: null, expected_base_sha256: '', text, words: [{ word: text }] })
+  });
+  console.log('save v1', r.status, await r.clone().json());
+})();
+```
+
+**קח אחרונה (version + hash)**:
+```
+(async () => {
+  const doc = 'FolderName/Filename.opus';
+  window.latest = await (await fetch(`http://localhost:5000/transcripts/latest?doc=${encodeURIComponent(doc)}`, { credentials: 'include' })).json();
+  console.log('latest', window.latest);
+})();
+```
+
+**שמור אישור אחד (offsets [0,3] – 3 תווים ראשונים)**:
+```
+(async () => {
+  const doc = 'FolderName/Filename.opus';
+  const v = window.latest?.version; const h = window.latest?.base_sha256;
+  const payload = {
+    doc, version: v, base_sha256: h,
+    items: [
+      { start_offset: 0, end_offset: 3, prefix: '', exact: (window.latest?.text || '').slice(0,3), suffix: (window.latest?.text || '').slice(3, 12) }
+    ]
+  };
+  const r = await fetch('http://localhost:5000/transcripts/confirmations/save', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
+    body: JSON.stringify(payload)
+  });
+  console.log('save confirmations', r.status, await r.clone().json());
+})();
+```
+
+**אמת רשימה**:
+```
+(async () => {
+  const doc = 'FolderName/Filename.opus';
+  const v = window.latest?.version;
+  const r = await fetch(`http://localhost:5000/transcripts/confirmations?doc=${encodeURIComponent(doc)}&version=${v}`, { credentials: 'include' });
+  console.log('list', r.status, await r.clone().json());
+})();
+```
+
+## סעיף 6: איך בחירה → offsets (ופיתוחים)
+
+בחירה ב-RTL: העורך מודד DOM ranges מ-#transcript להתחלות/סופים – RTL לא משנה, זה ספירת תווים ליניארית.
+- **\n**: סופר כתו אחד. בחירה חוצה – כולל אותו, מאשר חוצה פסקאות.
+- **Unicode**: ZWJ/ZWNJ/סימני bidi בלתי נראים נספרים. קנוניזציה מפחיתה רעש, אבל העתקה ממקורות שונים עלולה להוסיף/להסיר. אם exact נראה מוזר, בדוק char codes (console.log(text.charCodeAt(i))).
+
+**הסבר פינה קטנה**: DOM range זה כמו "הדגש" בדפדפן – העורך יוצר range מההתחלה לנקודות, וממיר ל-offsets. לוגי: "שלום" offsets 0-4, גם אם ויזואלית הפוך.
+
+## סעיף 7: Hash Gate (מעמיק)
+
+**מה hashed**: טקסט קנוני של הגרסה (לא עריכות חיות).
+- **סיבות אי-תאימות**: אישור עם עריכות לא שמורות – UI שומר קודם. אם שומר יוצר גרסה חדשה, עדכן version/hash.
+- עריכה חוצה-לשוניות או משתמש אחר שמר.
+- נדיר: הבדלי פלטפורמה אם קנוניזציה לא עקבית (אנחנו שומרים עקבי FE/BE).
+
+## סעיף 8: מקרי קצה
+
+- **\n מרובים**: משתמש הוסיף רצף – פסקאות קצרות/ריקות. ייצוא סובל; נוסיף נורמליזציה אם צריך.
+- **אישורים חופפים**: שרת לא דוחה – מאחסן ranges. רינדור מצבע כל חפיפה. נורמליזציה בצד לקוח (mergeRanges) אם רוצים למנוע.
+- **חסרי זמנים**: אישורים לא צריכים start/end – מבוססי טקסט. נשארים גם אם טוקנים ללא זמנים.
+- **Roll-forward גרסה**: שמירה ואז אישור – אם hash לא תואם, FE שומר, מעדכן, שולח מחדש.
+
+## סעיף 9: בדיקת אישורים
+
+רשום הכל (כמו סעיף 5). כל פריט: id, start_offset, end_offset, prefix, exact, suffix.
+- **ייצוא JSON**: GET /export/transcript/json?doc=<doc>&version=<N> – ודא exact בתוך text ב-offsets.
+- **בדיקות עמוקות**: שמור אישורים עם VTT/CSV בעתיד (הוסף endpoint CSV אם רוצים).
+
+## סעיף 10: איפה זה בקוד
+
+**חלק קדמי**: v2/ui/controls.js – מדידת בחירה (selectionRange()), mayConfirmNow() (בדיקת hash), persistConfirmations() (שמירה+טעינה).
+v2/render/overlay.js – צביעת "confirmed" עם offsets לטוקנים.
+**שרת**: explore/app/routes/transcripts.py – GET/POST /transcripts/confirmations (clear+insert בעסקה).
+Schema: transcript_confirmations(file_path, version, base_sha256, start_offset, end_offset, prefix, exact, suffix, created_at).
+
+**הסבר פינה קטנה**: עסקה (transaction) זה "אטום" – הכל מצליח או כישלון, מונע נתונים חלקיים.
+
+## סעיף 11: הערות ביצועים
+
+- **רינדור**: טווחים מוחלים רק על חלון גלוי (ווירטואלי). טוגל מהיר.
+- **תמלילים גדולים**: HUD (Ctrl+Alt+D) עוקב אחר זמן רינדור.
+
+## סעיף 12: טיפול בשגיאות
+
+- **"Hash conflict"**: שמור (או תן UI לשמור), אשר שוב. ודא תג גרסה (גרסה …) – אישורים עוגנים לשם.
+- **בחירה לא נראית נכון**: offsets מבוססי innerText (לוגי), לא ויזואלי. השתמש בהיסטוריה לבדיקת מיקומים.
+
+## סעיף 13: ייצוא תמלילים
+
+**מה תלמד**: ייצוא ל-WebVTT (נגנים), CSV (טבלאות), JSON (תכנותי). קיבוע לגרסה. בדיקות QA: זמנים, פסקאות, שלמות. שילוב אישורים.
+
+**תנאים מוקדמים**: הרץ שרת כפרקים קודמים. פתח עורך.
+
+## סעיף 14: מונחים קצרים (רענון)
+
+- גרסה: צילום קבוע.
+- base_sha256: חתימה לשלמות.
+- פסקה: טוקנים בין "\n".
+- טוקנים: מילים/תווים עם זמנים.
+- ווירטואלי: מצייר רק גלוי.
+
+## סעיף 15: סקירת ייצוא
+
+Endpoints:
+- VTT: GET /export/transcript/vtt?doc=<doc>&version=<N>
+- CSV: /export/transcript/csv?doc=…&version=<N>
+- JSON: /export/transcript/json?doc=…&version=<N>
+ללא version – אחרונה. קבע version ל-QA.
+
+**הסבר פינה קטנה**: למה קיבוע? ייצוא חוזר אותו דבר, גם אם אחרים שמרו.
+
+## סעיף 16: שלב 1 – זיהוי doc וגרסה
+
+בעורך: טען פרק (פאנל ימין). תג גרסה (גרסה …) מראה.
+או API:
+```
+(async () => {
+  const doc = 'FolderName/Filename.opus'; // החלף
+  const latest = await (await fetch(`http://localhost:5000/transcripts/latest?doc=${encodeURIComponent(doc)}`, { credentials: 'include' })).json();
+  console.log(latest); // { version, base_sha256, text, words? }
+})();
+```
+
+## סעיף 17: שלב 2 – ייצוא WebVTT
+
+**למה VTT**: תואם נגנים (VLC), ניתן לצפייה; כולל זמנים וטקסט.
+URL: http://localhost:5000/export/transcript/vtt?doc=<folder>/<file.opus>&version=<N>
+
+**PowerShell (שמירה לקובץ)**:
+```
+Invoke-WebRequest "http://localhost:5000/export/transcript/vtt?doc=$( [uri]::EscapeDataString('FolderName/Filename.opus') )&version=1" -OutFile transcript.vtt
+```
+
+**bash**:
+```
+curl -s -o transcript.vtt "http://localhost:5000/export/transcript/vtt?doc=$(python3 -c "import urllib.parse; print(urllib.parse.quote('FolderName/Filename.opus'))")&version=1"
+```
+
+**טיפים**: כותרת WEBVTT, cues: hh:mm:ss.mmm → hh:mm:ss.mmm + טקסט. ללא זמנים – 0.0, עדיין תקין אבל לא לשמע.
+
+## סעיף 18: שלב 3 – ייצוא CSV
+
+**למה CSV**: קל לבודקים (Excel), בדיקת פסקאות עם זמנים.
+URL: http://localhost:5000/export/transcript/csv?doc=<doc>&version=<N>
+
+**PowerShell**:
+```
+Invoke-WebRequest "http://localhost:5000/export/transcript/csv?doc=$( [uri]::EscapeDataString('FolderName/Filename.opus') )&version=1" -OutFile transcript.csv
+```
+
+**bash**:
+```
+curl -s -o transcript.csv "http://localhost:5000/export/transcript/csv?doc=$(python3 -c "import urllib.parse; print(urllib.parse.quote('FolderName/Filename.opus'))")&version=1"
+```
+
+**הערות**: UTF-8 עם BOM ל-Excel. עמודות: index,start,end,text (שורה לפסקה). "\n" מגדיר; רצף – פסקאות ריקות, סנן.
+
+## סעיף 19: שלב 4 – ייצוא JSON
+
+**למה JSON**: תכנותי; טקסט + words.
+URL: http://localhost:5000/export/transcript/json?doc=<doc>&version=<N>
+
+**PowerShell**:
+```
+Invoke-WebRequest "http://localhost:5000/export/transcript/json?doc=$( [uri]::EscapeDataString('FolderName/Filename.opus') )&version=1" -OutFile transcript.json
+```
+
+**bash**:
+```
+curl -s -o transcript.json "http://localhost:5000/export/transcript/json?doc=$(python3 -c "import urllib.parse; print(urllib.parse.quote('FolderName/Filename.opus'))")&version=1"
+```
+
+**תוכן**: { doc, version, text, words } – words מטבלה מנורמלת, או JSON שמור, או טוקן יחיד.
+
+## סעיף 20: שלב 5 – קיבוע ייצוא לגרסה
+
+**למה**: רפרודוקציה. מצא version: תג בעורך או /transcripts/history.
+```
+(async () => {
+  const doc = 'FolderName/Filename.opus';
+  const hist = await (await fetch(`http://localhost:5000/transcripts/history?doc=${encodeURIComponent(doc)}`, { credentials: 'include' })).json();
+  console.log(hist.map(h => ({v: h.version, parent: h.parent_version, hash: (h.hash||'').slice(0,8), at: h.created_at })));
+})();
+```
+
+## סעיף 21: שלב 6 – בדיקות QA בסיסיות
+
+- **VTT**: פתח ב-VLC – ודא זמנים ושורות.
+- **CSV ב-Excel**: זמנים עולים, ללא ריקים מיותרים.
+- **JSON**: text.length = סכום אורכי טוקנים (כולל "\n" כ-1). ללא זמנים – לא כשלון.
+
+## סעיף 22: שלב 7 – שילוב אישורים עם ייצוא
+
+**מטרה**: נתן לבודקים טקסט + מפת "מאומת".
+```
+(async () => {
+  const doc = 'FolderName/Filename.opus'; const version = 1; // קבע
+  const [j, c] = await Promise.all([
+    fetch(`http://localhost:5000/export/transcript/json?doc=${encodeURIComponent(doc)}&version=${version}`, { credentials: 'include' }).then(r=>r.json()),
+    fetch(`http://localhost:5000/transcripts/confirmations?doc=${encodeURIComponent(doc)}&version=${version}`, { credentials: 'include' }).then(r=>r.json())
+  ]);
+  // מיפוי אישורים על טקסט
+  const text = j.text || '';
+  const marks = (c || []).map(row => ({
+    start: row.start_offset, end: row.end_offset,
+    exact: row.exact, ok: text.slice(row.start_offset, row.end_offset) === row.exact
+  }));
+  console.table(marks);
+})();
+```
+
+**רעיון לבודקים**: CSV לפסקאות, JSON לאחוז כיסוי מאומת. אופציונלי: VTT "מאומת בלבד" (סנן פסקאות בתוך אישורים).
+
+## סעיף 23: מקרי קצה ומלכודות
+
+- **חסרי זמנים**: VTT תקין אבל 0.0 – יישר קודם.
+- **\n וגבולות**: שינויים משנים פסקאות – קבע version; “הצג שכבות” לזיהוי.
+- **RTL ב-CSV**: Excel מציג טוב; שנה יישור ימין אם צריך.
+- **טקסט ארוך**: JSON גדול – העדף CSV.
+
+## סעיף 24: איפה זה בקוד
+
+**ייצוא**: explore/app/routes/export.py – _build_vtt() via _segments_from_words(); CSV/JSON routes.
+**פסקאות**: פיצול על "\n".
+**Words**: transcript_words אם קיים – שומר גבולות.
+**אישורים**: explore/app/routes/transcripts.py.
+**כפתור VTT**: בעורך – ייצוא מקומי; backend ל-version קבוע.
+
+## סעיף 25: אופציונלי: בודקים דרך Docker
+
+**בנייה**: docker build -t explore-app .
+**PowerShell**: docker run --rm -p 5000:5000 -e DATA_DIR=/data -v ${PWD}:/data explore-app
+**bash**: docker run --rm -p 5000:5000 -e DATA_DIR=/data -v $(pwd):/data explore-app
+שתף: http://localhost:5000/v2 ו-URLs ייצוא.
+
+**הסבר פינה קטנה**: Docker זה "מכולה" – סביבה ניידת. שימושי לשיתוף ללא התקנות.
+
+## סעיף 26: סיכום ומה הבא
+
+חקרנו אישורים (עיגון, offsets, hash gate), מקרי קצה, ובדיקות; ייצוא (VTT/CSV/JSON), QA, ושילוב. הבא: חיפוש ואינדקס.
+
+זה סוף פרק 4 (מאוחד)! האם זה בסדר? אם כן, תגיד לי להמשיך לפרק 5. אם צריך שינויים, ספר לי.

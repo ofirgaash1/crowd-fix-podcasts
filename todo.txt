@@ -1,0 +1,54 @@
+Here’s a focused milestone plan tailored to your repo (Explore backend + V2 editor) and current state.
+
+Near-Term (Stabilize)
+
+DONE: Backend schema: finalize tables: transcripts/edits/confirmations/words; add migrations and idempotent init in explore/app/routes/transcripts.py:38.
+DONE: Words API: validate /transcripts/words chunking and fallbacks; enforce newline segmentation invariants.
+DONE: Save flow: harden hash-gate + 409 merge payloads; add smoke tests for /transcripts/save, /confirmations/save.
+Browser/episode list: lock UI to Explore endpoints; ensure Hebrew folder/file names work end-to-end.
+DONE: Local run DX: add Windows-friendly dev script (python explore/run.py --data-dir . --dev) and a one-liner for opening v2/index.html.
+DONE: Editor Functionality (Parity + UX)
+
+Core editing: guarantee modeless editing + IME safety; verify RTL selection and caret behavior in v2/index.html and v2/main.js.
+DONE: Version badge/history: add /transcripts/history?doc=… to aggregate lineage from transcripts + transcript_edits; render list with jump-to in UI.
+Diff layers: ensure “הצג שכבות שינויים” uses stored deltas; gracefully skip empty pairs.
+DONE: Confirmations: complete select→save→reload loop; persist round-trips with base_sha256 guard.
+DONE: Alignment (MVP)
+
+DONE: Segment align endpoint: complete /transcripts/align_segment happy-path, fallback when no timings; define neighbor window policy.
+DONE: Removed WASM/align worker entirely; alignment now uses only the backend endpoint.
+Performance
+
+DONE: Virtualizer: target 60fps at 200k+ chars; test worst-case inputs; measure paint/GC in DevTools.
+DONE: HUD panel shows render time and visible token count while scrolling (toggle Ctrl+Alt+D).
+Partial words fetching: windowed loads (segments N..N+K) via /transcripts/words; cache + evict strategy in state.
+Audio sync: verify v2/player/sync.js accuracy across variable rates; add drift correction.
+Search/Index
+
+DONE: Index manager: ensure DuckDB/SQLite sources are consistent; reindex CLI in explore/app/cli.py.
+Search UX: hook /search/segment into Search tab; add paging and keyboard nav.
+Quality & Tests
+
+DONE: API tests: lightweight pytest for transcripts endpoints using a tmp SQLite at DATA_DIR.
+Fixture data: minimal Hebrew episode (json + audio stub) for golden tests.
+DONE: Workers: determinism tests for diff worker.
+Deployment
+
+DONE: Docker: multi-stage image for Explore; static serving of /v2.
+Config: EXPLORE_API_BASE, CORS with credentials, secure cookies; production SECRET_KEY.
+DONE: Auth: finalize Google OAuth path (Authlib preferred) with dev bypass via TS_USER_EMAIL.
+Exports & Tooling
+
+DONE: Exports: VTT/CSV/JSON in explore/app/routes/export.py; verify against sample.
+Admin: backfill endpoint /transcripts/migrate_words (README mentions it) and CLI to normalize legacy JSON words.
+Stretch
+
+Multi-user DAG: 3‑way merge UI and ancestor tracking; auto-merge for non-overlapping diffs.
+Speaker turns: diarization fields; colorized rendering and filters.
+Analytics: PostHog events for saves, conflicts, confirmations (respect DISABLE_ANALYTICS).
+Success Metrics
+
+Save reliability: 99% success, conflicts return structured 409 with two diffs.
+Load performance: first paint <1s for 50k tokens; smooth scroll at 60fps.
+Alignment: re-time edited segments on server via endpoint.
+Search: <200ms for typical queries on local dataset.
