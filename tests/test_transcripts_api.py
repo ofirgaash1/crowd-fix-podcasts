@@ -166,3 +166,84 @@ def test_words_default_chunk_and_align_fallbacks(client):
     assert r_no_timings.status_code == 200
     jt = r_no_timings.get_json()
     assert jt.get('ok') is False and jt.get('reason') == 'no-timings'
+
+
+def test_words_no_zero_length_spans_after_save(client):
+    doc = 'tests/timing1.opus'
+    # v1 includes a mix: some words with timings, some without (end missing)
+    words_v1 = [
+        {'word': 'א', 'start': 0.0, 'end': 0.10},
+        {'word': ' ', 'start': 0.10, 'end': 0.20},
+        {'word': 'ב', 'start': 0.20},  # end missing → should be normalized
+        {'word': ' ', 'start': 0.25},  # end missing → should be normalized
+        {'word': '\n'},
+        {'word': 'ג', 'start': 0.50, 'end': 0.70},
+        {'word': 'ד'},  # missing timings
+    ]
+    text_v1 = ''.join(w.get('word', '') for w in words_v1)
+    rv1 = client.post('/transcripts/save', json={
+        'doc': doc,
+        'parentVersion': None,
+        'expected_base_sha256': '',
+        'text': text_v1,
+        'words': words_v1,
+    })
+    assert rv1.status_code == 200
+    v1 = rv1.get_json()['version']
+    r_words = client.get(f'/transcripts/words?doc={doc}&version={v1}')
+    assert r_words.status_code == 200
+    toks = r_words.get_json()
+    assert isinstance(toks, list) and len(toks) > 0
+    # Ensure all non-newline tokens have end > start
+    for t in toks:
+        if t.get('word') == '\n':
+            continue
+        s = float(t.get('start') or 0.0)
+        e = float(t.get('end') or 0.0)
+        assert e > s, f"zero-length span for {t.get('word')} s={s} e={e}"
+
+
+def test_carry_over_unchanged_tokens_keep_timings(client):
+    doc = 'tests/timing2.opus'
+    # v1 with clear timings
+    words_v1 = [
+        {'word': 'שלום', 'start': 0.00, 'end': 0.40},
+        {'word': ' ',    'start': 0.40, 'end': 0.50},
+        {'word': 'עולם', 'start': 0.50, 'end': 1.00},
+    ]
+    text_v1 = ''.join(w['word'] for w in words_v1)
+    r1 = client.post('/transcripts/save', json={
+        'doc': doc,
+        'parentVersion': None,
+        'expected_base_sha256': '',
+        'text': text_v1,
+        'words': words_v1,
+    })
+    assert r1.status_code == 200
+    base_hash = r1.get_json()['base_sha256']
+
+    # v2: append punctuation (new token), send words without timings → server should carry over unchanged timings
+    text_v2 = text_v1 + '!'
+    words_v2 = [ {'word': 'שלום'}, {'word': ' '}, {'word': 'עולם'}, {'word': '!'} ]
+    r2 = client.post('/transcripts/save', json={
+        'doc': doc,
+        'parentVersion': 1,
+        'expected_base_sha256': base_hash,
+        'text': text_v2,
+        'words': words_v2,
+    })
+    assert r2.status_code == 200
+    v2 = r2.get_json()['version']
+
+    w1 = client.get(f'/transcripts/words?doc={doc}&version=1').get_json()
+    w2 = client.get(f'/transcripts/words?doc={doc}&version={v2}').get_json()
+    # Compare first two non-newline tokens (unchanged): timings should be identical
+    def nonnl(arr):
+        return [t for t in arr if t.get('word') != '\n']
+    a1 = nonnl(w1)
+    a2 = nonnl(w2)
+    assert len(a1) >= 2 and len(a2) >= 2
+    for i in range(2):
+        assert a1[i]['word'] == a2[i]['word']
+        assert abs(float(a1[i]['start']) - float(a2[i]['start'])) < 1e-9
+        assert abs(float(a1[i]['end']) - float(a2[i]['end'])) < 1e-9

@@ -546,3 +546,22 @@ setupShowLayers(els, workers);
   } catch {}
 })();
 
+// Debug toggle: Ctrl+Shift+D flips localStorage('v2:debug') on/off and toasts state.
+try {
+  const getDebug = () => ((localStorage.getItem('v2:debug') || '').toLowerCase() === 'on');
+  const setDebug = (on) => { try { localStorage.setItem('v2:debug', on ? 'on' : 'off'); } catch {} };
+  window.toggleV2Debug = () => {
+    const next = !getDebug(); setDebug(next);
+    try { showToast(next ? 'Debug logs: ON' : 'Debug logs: OFF', next ? 'success' : 'info'); } catch {}
+    try { console.log(`[dbg] debug=${next?'on':'off'}`); } catch {}
+    return next;
+  };
+  window.addEventListener('keydown', (e) => {
+    try {
+      if (e && e.ctrlKey && e.shiftKey && (e.key === 'D' || e.key === 'd')) {
+        e.preventDefault(); window.toggleV2Debug();
+      }
+    } catch {}
+  });
+  if (getDebug()) { try { console.log('[dbg] Debug logs enabled'); } catch {} }
+} catch {}

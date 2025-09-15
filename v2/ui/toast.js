@@ -1,6 +1,12 @@
 // v2/ui/toast.js
 export function showToast(message, type = 'info', ms = 2500) {
   try {
+    // Also log toast messages for debugging/telemetry in v2 stack
+    try {
+      const tag = type === 'error' ? '[toast:error]' : type === 'success' ? '[toast:success]' : '[toast]';
+      // eslint-disable-next-line no-console
+      console.log(`${tag} ${String(message || '')}`);
+    } catch {}
     let cont = document.getElementById('toastContainer');
     if (!cont) {
       cont = document.createElement('div');

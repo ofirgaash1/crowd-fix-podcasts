@@ -1,6 +1,6 @@
 // v2/ui/controls.js
 import { store, getState } from '../core/state.js';
-import { showToast } from './toast.js';
+import { showToast } from '../v2/ui/toast.js';
 import { canonicalizeText } from '../shared/canonical.js';
 import { verifyChainHash } from '../history/verify-chain.js';
 import { saveTranscriptVersion, saveTranscriptEdit, saveCorrectionToDB, markCorrection, getLatestTranscript, getTranscriptVersion, saveConfirmations, sha256Hex } from '../data/api.js';

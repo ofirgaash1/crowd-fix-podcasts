@@ -1,16 +1,14 @@
 from __future__ import annotations
 
 import hashlib
-import json as pyjson
 import difflib
-import gzip
-from pathlib import Path
+import os
+import logging
 from typing import Optional
 
 import orjson
 from flask import Blueprint, current_app, jsonify, request, abort, session
 import subprocess
-import io
 import requests
 
 from ..services.db import DatabaseService
@@ -50,6 +48,7 @@ def _column_exists(db: DatabaseService, table: str, column: str) -> bool:
     return False
 
 bp = Blueprint("transcripts", __name__, url_prefix="/transcripts")
+logger = logging.getLogger(__name__)
 
 
 def _db() -> DatabaseService:
@@ -293,6 +292,50 @@ def _populate_transcript_words(db: DatabaseService, doc: str, version: int, word
         )
 
 
+def _normalize_end_times(db: DatabaseService, doc: str, version: int, min_dur: float = 0.20) -> int:
+    """Ensure each token in transcript_words for (doc,version) has end_time > start_time.
+    Uses next token's start within each segment when available; otherwise start + min_dur.
+    Returns number of rows updated.
+    """
+    cur = db.execute(
+        """
+        SELECT segment_index, word_index, start_time, end_time
+        FROM transcript_words
+        WHERE file_path=? AND version=?
+        ORDER BY segment_index ASC, word_index ASC
+        """,
+        [doc, int(version)]
+    )
+    rows = cur.fetchall() or []
+    updated = []
+    # Group by segment
+    seg_map = {}
+    for seg, wi, st, en in rows:
+        seg_map.setdefault(int(seg), []).append([int(wi), float(st) if st is not None else 0.0, float(en) if en is not None else None])
+    for seg, items in seg_map.items():
+        n = len(items)
+        for i in range(n):
+            wi, s, e = items[i]
+            # Compute target end
+            te = e if (e is not None and e > s) else None
+            if te is None:
+                # next token start within segment if greater
+                ns = None
+                for j in range(i+1, n):
+                    ns_candidate = items[j][1]
+                    if ns_candidate > s:
+                        ns = ns_candidate; break
+                te = ns if (ns is not None) else (s + float(min_dur))
+            # Update if changed or invalid
+            if e is None or te > e or e <= s:
+                updated.append((float(te), doc, int(version), int(wi)))
+    if updated:
+        db.batch_execute(
+            "UPDATE transcript_words SET end_time=? WHERE file_path=? AND version=? AND word_index=?",
+            updated
+        )
+    return len(updated)
+
 @bp.route('/latest', methods=['GET'])
 def get_latest():
     doc = request.args.get('doc', '').strip()
@@ -324,6 +367,10 @@ def save_version():
     expected_base_sha256 = (body.get('expected_base_sha256') or '').strip()
     text = str(body.get('text') or '')
     words = body.get('words', [])
+    seg_hint = body.get('segment', None)
+    neighbors = int(body.get('neighbors', 1) or 1)
+    if neighbors < 0: neighbors = 0
+    if neighbors > 3: neighbors = 3
     if not doc:
         abort(400, 'missing doc')
     if not isinstance(words, list):
@@ -377,8 +424,258 @@ def save_version():
     new_version = (latest['version'] + 1) if latest else 1
     new_hash = _sha256_hex(text)
 
-    # Serialize words for storage
+    # Serialize words for storage (will update after carry-over enrichment)
     words_json = orjson.dumps(words).decode('utf-8')
+    try:
+        _wt = 0
+        for _w in (words or []):
+            try:
+                s = float(_w.get('start')) if _w.get('start') is not None else 0.0
+                e = float(_w.get('end')) if _w.get('end') is not None else 0.0
+                if s > 0 or e > 0: _wt += 1
+            except Exception:
+                pass
+        logger.info(f"[SAVE] incoming words: count={len(words or [])} with_timing={_wt} latest_ver={(latest or {}).get('version', 0)} seg_hint={seg_hint}")
+    except Exception:
+        pass
+
+    # Attempt alignment BEFORE saving (atomic):
+    # Derive window from previous version timings if available
+    updates = []  # (start_time, end_time, file_path, version, word_index)
+    token_ops_block = None
+    if latest and seg_hint is not None:
+        try:
+            seg_hint = int(seg_hint)
+            start_seg = max(0, int(seg_hint) - max(0, neighbors))
+            end_seg = int(seg_hint) + max(0, neighbors)
+            # Gather previous timings to determine clip
+            cur = db.execute(
+                """
+                SELECT segment_index, word_index, word, start_time, end_time, probability
+                FROM transcript_words
+                WHERE file_path=? AND version=? AND segment_index >= ? AND segment_index <= ?
+                ORDER BY word_index ASC
+                """,
+                [doc, int(latest['version']), start_seg, end_seg]
+            )
+            prev_rows = cur.fetchall() or []
+            clip_start = None; clip_end = None
+            for seg_i, wi, w, st, en, pr in prev_rows:
+                if st is not None:
+                    clip_start = st if clip_start is None else min(clip_start, float(st))
+                if en is not None:
+                    clip_end = en if clip_end is None else max(clip_end, float(en))
+            if clip_start is None or clip_end is None or clip_end <= clip_start:
+                # Skip pre-align when no timings exist in the previous window
+                clip_start = None; clip_end = None
+                updates = []
+                token_ops_block = None
+                raise RuntimeError('prealign-skip:no-timings')
+            # Build new window transcript and mapping of word indices
+            new_window = []  # (global_word_index, word, seg)
+            seg_idx = 0
+            for wi, w in enumerate(words or []):
+                try:
+                    t = str(w.get('word') or '')
+                except Exception:
+                    t = ''
+                if t == '\n':
+                    seg_idx += 1
+                    continue
+                if seg_idx >= start_seg and seg_idx <= end_seg:
+                    new_window.append((wi, t, seg_idx))
+            new_transcript = ''.join(t for _, t, _ in new_window)
+            # Resolve audio
+            from ..utils import resolve_audio_path
+            audio_path = resolve_audio_path(doc)
+            if not audio_path:
+                # Skip pre-align if audio is missing; allow save to proceed
+                updates = []
+                token_ops_block = None
+                raise RuntimeError('prealign-skip:audio-not-found')
+            # Pointer deref safety
+            try:
+                if os.path.isfile(audio_path) and os.path.getsize(audio_path) <= 512:
+                    with open(audio_path, 'rb') as _pf:
+                        data = _pf.read(512)
+                    import re as _re
+                    m = _re.search(r'([A-Fa-f0-9]{40,64})', data.decode('utf-8','ignore'))
+                    if m:
+                        sha = m.group(1)
+                        audio_dir = current_app.config.get('AUDIO_DIR')
+                        if audio_dir:
+                            cand = os.path.join(audio_dir, 'blobs', sha)
+                            if os.path.exists(cand):
+                                audio_path = cand
+            except Exception:
+                pass
+            # Extract clip
+            pad = 0.10
+            ss = max(0.0, float(clip_start) - pad)
+            to = float(clip_end) + pad
+            cmd = [
+                'ffmpeg', '-hide_banner', '-loglevel', 'error',
+                '-ss', f'{ss:.3f}', '-to', f'{to:.3f}', '-i', audio_path,
+                '-ac', '1', '-ar', '16000', '-f', 'wav', 'pipe:1'
+            ]
+            p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+            wav_bytes = p.stdout
+            # Align
+            files = { 'audio': ('clip.wav', wav_bytes, 'audio/wav') }
+            data = { 'transcript': new_transcript }
+            r = requests.post(current_app.config.get('ALIGN_ENDPOINT', 'http://silence-remover.com:8000/align'), files=files, data=data, timeout=60)
+            if not r.ok:
+                # Skip pre-align on endpoint error; allow save to proceed
+                updates = []
+                token_ops_block = None
+                raise RuntimeError(f'prealign-skip:endpoint {r.status_code}')
+            res = r.json()
+            resp_words = (res or {}).get('words') or []
+            try:
+                _smpl = [(str((w or {}).get('word') or ''), (w or {}).get('start'), (w or {}).get('end')) for w in (resp_words[:10] or [])]
+                logger.info(f"[ALIGN] prealign response: words={len(resp_words)} sample={_smpl}")
+            except Exception:
+                pass
+            # Map by order of non-whitespace tokens; ensure non-zero durations
+            offset = ss
+            matched = 0
+            MIN_DUR = 0.20
+            def _norm(s):
+                try:
+                    return str(s or '').strip()
+                except Exception:
+                    return ''
+            new_seq = [(i, _norm(t)) for (i, t, _seg) in new_window if _norm(t) != '']
+            resp_seq = [((w or {}), _norm((w or {}).get('word'))) for w in (resp_words or []) if _norm((w or {}).get('word')) != '']
+            m = min(len(new_seq), len(resp_seq))
+            for k in range(m):
+                wi, _t = new_seq[k]
+                rw, _rt = resp_seq[k]
+                try:
+                    rs = float(rw.get('start') or 0.0) + offset
+                except Exception:
+                    rs = offset
+                try:
+                    re = float(rw.get('end') or 0.0) + offset
+                except Exception:
+                    re = rs
+                if not (re > rs):
+                    # Try next response start
+                    next_rs = None
+                    if (k + 1) < m:
+                        try:
+                            rn = resp_seq[k+1][0]
+                            next_rs = float(rn.get('start') or 0.0) + offset
+                        except Exception:
+                            next_rs = None
+                    re = next_rs if (next_rs is not None and next_rs > rs) else (rs + MIN_DUR)
+                updates.append((rs, re, wi))
+                matched += 1
+            try:
+                logger.info(f"[ALIGN] prealign mapping: new_seq={len(new_seq)} resp_seq={len(resp_seq)} matched={matched} updates={len(updates)}")
+            except Exception:
+                pass
+            if matched == 0:
+                # No token matched; skip pre-align
+                updates = []
+                token_ops_block = None
+                raise RuntimeError('prealign-skip:no-match')
+            # Prepare token_ops block
+            token_ops_block = {
+                'type': 'timing_adjust',
+                'segment_start': start_seg,
+                'segment_end': end_seg,
+                'clip_start': ss,
+                'clip_end': to,
+                'items': [ { 'word_index': wi, 'new_start': s, 'new_end': e } for (s,e,wi) in updates ],
+                'service': 'silence-remover',
+            }
+        except Exception as e:
+            # Any pre-align failure should not block saving the version; continue gracefully
+            try:
+                logger.info(f"[ALIGN] prealign skipped: {str(e)}")
+            except Exception:
+                pass
+            updates = []
+            token_ops_block = None
+
+    # Carry over timings/probabilities from previous version for unchanged tokens
+    try:
+        if latest and isinstance(words, list) and words:
+            cur = db.execute(
+                """
+                SELECT word_index, word, start_time, end_time, probability
+                FROM transcript_words
+                WHERE file_path=? AND version=?
+                ORDER BY word_index ASC
+                """,
+                [doc, int(latest['version'])]
+            )
+            prev_rows = cur.fetchall() or []
+            prev_seq = []  # list of dicts without newlines (since DB doesn't store them)
+            for wi, w, st, en, pr in prev_rows:
+                try:
+                    prev_seq.append({ 'word': str(w or ''), 'start': st, 'end': en, 'prob': pr })
+                except Exception:
+                    prev_seq.append({ 'word': str(w or ''), 'start': None, 'end': None, 'prob': None })
+            # two-pointer scan with small lookahead to find matches in order
+            LOOKAHEAD = 64
+            pi = 0
+            enriched = []
+            for w in (words or []):
+                try:
+                    t = str(w.get('word') or '')
+                except Exception:
+                    t = ''
+                if t == '\n':
+                    enriched.append({ 'word': '\n' })
+                    continue
+                # determine if current word already has usable timings/probability
+                s_raw = w.get('start', None)
+                e_raw = w.get('end', None)
+                p_raw = w.get('probability', None)
+                def _num(x):
+                    try:
+                        return float(x)
+                    except Exception:
+                        return None
+                s_num = _num(s_raw)
+                e_num = _num(e_raw)
+                # consider timings present only when either start or end is a positive number, or end >= start and end > 0
+                timings_present = ((e_num is not None and e_num > 0) or (s_num is not None and s_num > 0))
+                prob_present = False
+                try:
+                    p_num = float(p_raw)
+                    prob_present = (p_raw is not None) and (p_num == p_num)  # not NaN
+                except Exception:
+                    p_num = None
+                    prob_present = False
+                s_val = s_raw
+                e_val = e_raw
+                p_val = p_raw
+                if not (timings_present and prob_present):
+                    match_j = -1
+                    limit = min(len(prev_seq), pi + LOOKAHEAD)
+                    for j in range(pi, limit):
+                        if str(prev_seq[j]['word'] or '') == t:
+                            match_j = j
+                            break
+                    if match_j >= 0:
+                        pi = match_j + 1
+                        if not timings_present:
+                            s_val = prev_seq[match_j]['start']
+                            e_val = prev_seq[match_j]['end']
+                        if not prob_present:
+                            p_val = prev_seq[match_j]['prob']
+                enriched.append({ 'word': t, **({ 'start': s_val } if s_val is not None else {}), **({ 'end': e_val } if e_val is not None else {}), **({ 'probability': p_val } if p_val is not None else {}) })
+            words = enriched
+            try:
+                words_json = orjson.dumps(words).decode('utf-8')
+            except Exception:
+                pass
+    except Exception:
+        # If carry-over fails, fall back to client-provided words
+        pass
 
     # Begin transaction
     db.execute("BEGIN TRANSACTION")
@@ -390,18 +687,28 @@ def save_version():
         )
         # Populate normalized words rows for this version
         _populate_transcript_words(db, doc, new_version, words)
+        # Apply alignment updates if any
+        if updates:
+            db.batch_execute(
+                "UPDATE transcript_words SET start_time=?, end_time=? WHERE file_path=? AND version=? AND word_index=?",
+                [ (s, e, doc, int(new_version), wi) for (s,e,wi) in updates ]
+            )
+        # Normalize end_time to ensure non-zero durations per token
+        try:
+            norm_count = _normalize_end_times(db, doc, int(new_version), min_dur=0.20)
+        except Exception:
+            norm_count = 0
 
         # Store edit deltas relative to parent (if exists)
         if latest:
             d_parent = _diff(latest['text'] or '', text)
             db.execute(
                 "INSERT OR REPLACE INTO transcript_edits (file_path, parent_version, child_version, dmp_patch, token_ops) VALUES (?, ?, ?, ?, ?)",
-                [doc, int(latest['version']), new_version, d_parent, None]
+                [doc, int(latest['version']), new_version, d_parent, orjson.dumps(token_ops_block).decode('utf-8') if token_ops_block else None]
             )
 
         # Also store delta relative to origin (v1) for fast replay
         if latest and latest['version'] >= 1:
-            # Fetch v1
             v1 = _row_for_version(db, doc, 1)
             if v1:
                 d_origin = _diff(v1['text'] or '', text)
@@ -411,6 +718,16 @@ def save_version():
                 )
 
         db.commit()
+        try:
+            # Debug: how many tokens have timings after save
+            cur = db.execute(
+                "SELECT COUNT(*), SUM(CASE WHEN start_time IS NOT NULL OR end_time IS NOT NULL THEN 1 ELSE 0 END) FROM transcript_words WHERE file_path=? AND version=?",
+                [doc, int(new_version)]
+            )
+            row = cur.fetchone() or [0, 0]
+            logger.info(f"[SAVE] persisted tokens: total={int(row[0] or 0)} with_timings={int(row[1] or 0)} normalized={int(norm_count or 0)}")
+        except Exception:
+            pass
     except Exception:
         db.execute("ROLLBACK")
         raise
@@ -498,6 +815,16 @@ def align_segment():
             clip_end = en if clip_end is None else max(clip_end, float(en))
 
     transcript = ''.join(w['word'] for w in words)
+    # Debug: window stats
+    try:
+        nonspace = [w for w in words if not (w.get('word') or '').isspace()]
+        none_timings = sum(1 for w in words if (w.get('start') is None or w.get('end') is None))
+        logger.info(f"[ALIGN] window stats: tokens={len(words)} nonspace={len(nonspace)} none_timings={none_timings} clip={[clip_start, clip_end]} transcript_len={len(transcript)}")
+        if words:
+            logger.info(f"[ALIGN] window sample: {[ (w.get('seg'), w.get('word')) for w in words[:12] ]}")
+    except Exception:
+        pass
+
     if clip_start is None or clip_end is None or clip_end <= clip_start:
         # No timings to slice; nothing to do
         return jsonify({ "ok": False, "reason": "no-timings" }), 200
@@ -511,6 +838,44 @@ def align_segment():
     if not audio_path:
         return ("audio not found", 404)
 
+    # If the resolved path is a tiny pointer file, attempt to dereference to blobs/<sha>
+    try:
+        import re as _re
+        if os.path.isfile(audio_path):
+            sz0 = os.path.getsize(audio_path)
+            if sz0 <= 512:
+                with open(audio_path, 'rb') as _pf:
+                    data = _pf.read(512)
+                # try common encodings
+                text = ''
+                for enc in ('utf-8','utf-16','utf-16-le','utf-16-be','latin-1'):
+                    try:
+                        text = data.decode(enc, 'ignore').strip()
+                        if text:
+                            break
+                    except Exception:
+                        continue
+                m = _re.search(r'([A-Fa-f0-9]{40,64})', text)
+                if m:
+                    sha = m.group(1)
+                    audio_dir = current_app.config.get('AUDIO_DIR')
+                    if audio_dir:
+                        cand = os.path.join(audio_dir, 'blobs', sha)
+                        if os.path.exists(cand):
+                            audio_path = cand
+    except Exception:
+        pass
+
+    # Debug: log resolved audio path and size (helps diagnose pointer stubs vs. real blobs)
+    try:
+        sz = os.path.getsize(audio_path) if os.path.isfile(audio_path) else -1
+    except Exception:
+        sz = -1
+    try:
+        logger.info(f"[ALIGN] doc={doc!r} ver={version} seg={seg} neighbors={neighbors} audio_path={audio_path!r} size={sz}")
+    except Exception:
+        pass
+
     # Extract WAV clip via ffmpeg
     pad = 0.10
     ss = max(0.0, float(clip_start) - pad)
@@ -521,47 +886,75 @@ def align_segment():
         '-ac', '1', '-ar', '16000', '-f', 'wav', 'pipe:1'
     ]
     try:
+        logger.info(f"[ALIGN] ffmpeg cmd: {' '.join(cmd)}")
+    except Exception:
+        pass
+    try:
         p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
         wav_bytes = p.stdout
     except Exception as e:
-        return (f'ffmpeg failed: {getattr(e, "stderr", b"").decode("utf-8", "ignore")}', 500)
+        try:
+            err = getattr(e, 'stderr', b'')
+            logger.error(f"[ALIGN] ffmpeg failed for {audio_path!r}: {err.decode('utf-8','ignore')}")
+        except Exception:
+            pass
+        return (f'ffmpeg failed: {getattr(e, "stderr", b"\"").decode("utf-8", "ignore")}', 500)
 
     # Call external alignment endpoint
     try:
         files = { 'audio': ('clip.wav', wav_bytes, 'audio/wav') }
         data = { 'transcript': transcript }
-        r = requests.post('http://silence-remover.com:8000/align', files=files, data=data, timeout=60)
+        r = requests.post(current_app.config.get('ALIGN_ENDPOINT', 'http://silence-remover.com:8000/align'), files=files, data=data, timeout=60)
         if not r.ok:
             return (f'align endpoint error: {r.status_code} {r.text[:200]}', 502)
         res = r.json()
+        try:
+            rw = (res or {}).get('words') or []
+            logger.info(f"[ALIGN] align response: words={len(rw)} sample={[(x.get('word'), x.get('start'), x.get('end')) for x in rw[:10]]}")
+        except Exception:
+            pass
     except Exception as e:
         return (f'align request failed: {e}', 502)
 
-    # Map response words to global times and compute diffs
+    # Map response words to global times by order of non-space tokens; ensure non-zero durations
     resp_words = (res or {}).get('words') or []
     offset = ss  # our clip starts at ss; align times relative to this
-    # Filter out whitespace-only tokens from old words for comparison
-    old_seq = [w for w in words if not (w['word'] or '').isspace()]
-    diffs = []
-    count = min(len(old_seq), len(resp_words))
-    for i in range(count):
-        ow = old_seq[i]
-        rw = resp_words[i] or {}
+    MIN_DUR = 0.20
+    # Build sequences excluding whitespace-only tokens
+    def _norm(s):
         try:
-            ow_text = str(ow.get('word') or '')
-            rw_text = str(rw.get('word') or '')
+            return str(s or '').strip()
         except Exception:
-            ow_text = str(ow.get('word') or '')
-            rw_text = str(rw.get('word') or '')
-        # Only compare when strings match exactly
-        if ow_text != rw_text:
-            continue
+            return ''
+    old_seq = [w for w in words if _norm(w.get('word')) != '']
+    resp_seq = [w or {} for w in resp_words if _norm((w or {}).get('word')) != '']
+    diffs = []
+    matched = 0
+    updates = []  # (start_time, end_time, file_path, version, word_index)
+    m = min(len(old_seq), len(resp_seq))
+    for i in range(m):
+        ow = old_seq[i]
+        rw = resp_seq[i] or {}
+        ow_text = _norm(ow.get('word'))
         old_s = float(ow.get('start') or ow.get('end') or 0.0)
         old_e = float(ow.get('end') or ow.get('start') or 0.0)
-        new_s = float(rw.get('start') or 0.0) + offset
-        new_e = float(rw.get('end') or 0.0) + offset
-        if not (new_e >= new_s):
-            continue
+        try:
+            new_s = float(rw.get('start') or 0.0) + offset
+        except Exception:
+            new_s = offset
+        try:
+            new_e = float(rw.get('end') or 0.0) + offset
+        except Exception:
+            new_e = new_s
+        if not (new_e > new_s):
+            # try next start or min duration
+            next_s = None
+            if (i + 1) < m:
+                try:
+                    next_s = float((resp_seq[i+1] or {}).get('start') or 0.0) + offset
+                except Exception:
+                    next_s = None
+            new_e = next_s if (next_s is not None and next_s > new_s) else (new_s + MIN_DUR)
         diffs.append({
             'word': ow_text,
             'old_start': old_s,
@@ -572,6 +965,33 @@ def align_segment():
             'delta_end': new_e - old_e,
             'segment_index': int(ow.get('seg') or seg),
         })
+        matched += 1
+        try:
+            wi = int(ow.get('wi'))
+            updates.append((new_s, new_e, doc, int(version), wi))
+        except Exception:
+            pass
+
+    try:
+        logger.info(f"[ALIGN] mapping: old_seq={len(old_seq)} resp={len(resp_words)} matched={matched} skipped_text_mismatch={skipped} diffs={len(diffs)}")
+    except Exception:
+        pass
+
+    # Persist timing updates for matched tokens (so inserts around the window still benefit)
+    if updates:
+        try:
+            db.execute("BEGIN TRANSACTION")
+            db.batch_execute(
+                "UPDATE transcript_words SET start_time=?, end_time=? WHERE file_path=? AND version=? AND word_index=?",
+                updates
+            )
+            db.commit()
+            try:
+                logger.info(f"[ALIGN] timings updated: {len(updates)} tokens")
+            except Exception:
+                pass
+        except Exception:
+            db.execute("ROLLBACK")
 
     # Update transcript_edits.token_ops for parent->child
     parent_version = max(0, version - 1)
@@ -776,19 +1196,83 @@ def get_words():
     )
     rows = cur.fetchall() or []
     if rows:
+        # Normalize per-segment so end >= start. If end missing/<=start, use next token's start
+        # within the same segment; otherwise use start + MIN_DUR.
+        MIN_DUR = 0.20
         out = []
-        last_seg = None
+        with_timing = 0
+        cur_seg = None
+        buf = []  # collect tokens for current segment
+
+        def flush_segment(segment_tokens):
+            nonlocal out, with_timing
+            n = len(segment_tokens)
+            # First pass: ensure numeric values
+            for t in segment_tokens:
+                try:
+                    if t.get('start') is None:
+                        t['start'] = 0.0
+                    else:
+                        t['start'] = float(t.get('start') or 0.0)
+                except Exception:
+                    t['start'] = 0.0
+                try:
+                    if t.get('end') is None:
+                        t['end'] = float(t.get('start') or 0.0)
+                    else:
+                        t['end'] = float(t.get('end') or 0.0)
+                except Exception:
+                    t['end'] = float(t.get('start') or 0.0)
+            # Second pass: lookahead normalization
+            for i in range(n):
+                s = float(segment_tokens[i].get('start') or 0.0)
+                e = float(segment_tokens[i].get('end') or 0.0)
+                if not (e > s):
+                    # Try next start within segment
+                    next_s = None
+                    for j in range(i+1, n):
+                        ns = float(segment_tokens[j].get('start') or 0.0)
+                        if ns > s:
+                            next_s = ns
+                            break
+                    if next_s is not None:
+                        e = next_s
+                    else:
+                        e = s + MIN_DUR
+                    segment_tokens[i]['end'] = e
+                # accumulate timing count
+                if (s > 0) or (e > 0):
+                    with_timing += 1
+            out.extend(segment_tokens)
+
         for seg, wi, word, st, en, pr in rows:
-            # insert newline token when segment changes (except first)
-            if last_seg is not None and seg != last_seg:
-                out.append({"word": "\n", "start": st or 0.0, "end": st or 0.0, "probability": None})
-            out.append({
+            if (cur_seg is not None) and (seg != cur_seg):
+                # newline separator between segments
+                if buf:
+                    flush_segment(buf)
+                    buf = []
+                # Use the last known time from previous segment for the newline token
+                try:
+                    prev_end = out[-1]['end'] if out else 0.0
+                except Exception:
+                    prev_end = 0.0
+                out.append({"word": "\n", "start": prev_end, "end": prev_end, "probability": None})
+            # push current token into segment buffer
+            buf.append({
                 "word": word,
-                "start": float(st) if st is not None else 0.0,
-                "end": float(en) if en is not None else (float(st) if st is not None else 0.0),
+                "start": st if st is not None else 0.0,
+                "end": en if en is not None else None,
                 "probability": float(pr) if pr is not None else None,
             })
-            last_seg = seg
+            cur_seg = seg
+        # flush last segment
+        if buf:
+            flush_segment(buf)
+
+        try:
+            logger.info(f"[WORDS] doc={doc!r} ver={version} seg_q={seg_q!r} count_q={count_q!r} returned={len(out)} with_timing={with_timing}")
+        except Exception:
+            pass
         return jsonify(out)
 
     # Fallback: use stored JSON words (optionally segment-sliced)

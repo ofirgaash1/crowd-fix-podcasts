@@ -305,7 +305,7 @@ export async function getTranscriptWords(filePath, version, opts = {}) {
   return await r.json();
 }
 
-export async function saveTranscriptVersion(filePath, { parentVersion = null, text, words, expectedBaseSha256 = '' }) {
+export async function saveTranscriptVersion(filePath, { parentVersion = null, text, words, expectedBaseSha256 = '', segment = null, neighbors = null }) {
   const base = getBackendBase();
   if (!base) throw new Error('Backend base not configured');
   const payload = {
@@ -315,6 +315,15 @@ export async function saveTranscriptVersion(filePath, { parentVersion = null, te
     text: String(text || ''),
     words: Array.isArray(words) ? words : []
   };
+  try {
+    if (Number.isFinite(+segment)) payload.segment = +segment;
+  } catch {}
+  try {
+    if (Number.isFinite(+neighbors)) {
+      const n = Math.max(0, Math.min(3, +neighbors));
+      payload.neighbors = n;
+    }
+  } catch {}
   const r = await fetchBackend(`${base}/transcripts/save`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
   });
@@ -326,6 +335,25 @@ export async function saveTranscriptVersion(filePath, { parentVersion = null, te
     throw new Error(await r.text().catch(()=> 'save failed'));
   }
   return await r.json();
+}
+
+/** Request alignment for a segment neighborhood of a given version */
+export async function alignSegment(filePath, { version, segment, neighbors = 1 } = {}) {
+  const base = getBackendBase();
+  if (!base) throw new Error('Backend base not configured');
+  const body = {
+    doc: filePath,
+    version: Number.isFinite(+version) ? +version : undefined,
+    segment: Number.isFinite(+segment) ? +segment : undefined,
+    neighbors: Math.max(0, Math.min(3, Number.isFinite(+neighbors) ? +neighbors : 1)),
+  };
+  const r = await fetchBackend(`${base}/transcripts/align_segment`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  if (!r.ok) throw new Error(await r.text().catch(()=> 'align failed'));
+  try { return await r.json(); } catch { return { ok: false }; }
 }
 
 /** Fetch transcript edits (diff layers) for a file */
@@ -353,22 +381,6 @@ export async function getTranscriptEdits(filePath) {
  * Body: { doc, version?, segment, neighbors? }
  * Returns summary of timing adjustments or error
  */
-export async function alignSegment(opts) {
-  const base = getBackendBase();
-  if (!base) throw new Error('Backend base not configured');
-  const url = `${base}/transcripts/align_segment`;
-  const r = await fetchBackend(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(opts || {})
-  });
-  if (!r.ok) {
-    let msg = 'alignment failed';
-    try { msg = await r.text(); } catch {}
-    throw new Error(msg);
-  }
-  return await r.json();
-}
 
 /** Fetch all transcript versions with text (ASC) for diff layers */
 export async function getAllTranscripts(filePath) {

@@ -57,6 +57,17 @@ export function setupEditorPipeline(els, { workers, virtualizer, getDocKey, edit
       const toks = tokensFromText(liveAtStart);
       const stNow = getState(); if (docAtStart !== getDocKey() || genAtStart !== editGenRef.value || stNow.liveText !== liveAtStart) return;
       if (nowMs() < getTypingQuietUntil()) return;
+      // Avoid clobbering aligned tokens with zeroed placeholders after save.
+      const hasTiming = (arr) => {
+        if (!Array.isArray(arr)) return false;
+        for (const t of arr) {
+          const s = (t && Number.isFinite(t.start)) ? +t.start : 0;
+          const e = (t && Number.isFinite(t.end)) ? +t.end : 0;
+          if (s > 0 || e > 0) return true;
+        }
+        return false;
+      };
+      if (hasTiming(stNow.tokens) && !hasTiming(toks)) { try { if ((localStorage.getItem('v2:debug')||'').toLowerCase()==='on') console.debug('[dbg] tokensFromText: skipped to preserve aligned timings'); } catch {} return; }
       store.setTokens(toks);
     } finally {
       if (sel && nowMs() >= getTypingQuietUntil()) setSelectionByOffsets(els.transcript, sel[0], sel[1]);

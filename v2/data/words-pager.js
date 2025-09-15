@@ -5,6 +5,7 @@ import { api } from './api.js';
 import { store } from '../core/state.js';
 
 export function setupWordsPager(els, virtualizer, { chunkSegs = 50 } = {}) {
+  const dbg = (...args) => { try { if ((localStorage.getItem('v2:debug') || '').toLowerCase() === 'on') console.log(...args); } catch {} };
   let running = false;
   let abort = false;
 
@@ -15,6 +16,7 @@ export function setupWordsPager(els, virtualizer, { chunkSegs = 50 } = {}) {
     const doc = `${folder}/${file}`;
     const version = store.getState()?.version || 0;
     if (!doc || !version) { running = false; return; }
+    dbg(`[dbg] pager:start doc=${doc} version=${version} chunk=${chunkSegs}`);
     // If tokens already present (full or near-full), skip pager to avoid overriding complete data
     try {
       const st = store.getState();
@@ -40,6 +42,7 @@ export function setupWordsPager(els, virtualizer, { chunkSegs = 50 } = {}) {
       // small pause to keep UI responsive
       await new Promise(r => setTimeout(r, 20));
     }
+    dbg(`[dbg] pager:done tokens=${all.length}`);
     running = false;
   }
 

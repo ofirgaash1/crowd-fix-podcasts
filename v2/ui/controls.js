@@ -3,10 +3,11 @@ import { store, getState } from '../core/state.js';
 import { showToast } from './toast.js';
 import { canonicalizeText } from '../shared/canonical.js';
 import { verifyChainHash } from '../history/verify-chain.js';
-import { saveTranscriptVersion, markCorrection, getLatestTranscript, getTranscriptVersion, getTranscriptWords, saveConfirmations, getConfirmations, sha256Hex, alignSegment } from '../data/api.js';
+import { saveTranscriptVersion, alignSegment, markCorrection, getLatestTranscript, getTranscriptVersion, getTranscriptWords, saveConfirmations, getConfirmations, sha256Hex } from '../data/api.js';
 import { computeAbsIndexMap } from '../render/overlay.js';
 
 export function setupUIControls(els, { workers }, virtualizer, playerCtrl, isIdle) {
+  const dbg = (...args) => { try { if ((localStorage.getItem('v2:debug') || '').toLowerCase() === 'on') console.log(...args); } catch {} };
   // Probability highlight toggle
   if (els.probToggle) {
     const LS_KEY = 'probHL';
@@ -195,6 +196,68 @@ export function setupUIControls(els, { workers }, virtualizer, playerCtrl, isIdl
   // Save (queued)
   let saveQueued = false; let saving = false;
   const setSaveButton = (state) => { if (!els.submitBtn) return; if (state === 'waiting') { els.submitBtn.disabled = true; els.submitBtn.textContent = 'ממתין לעיבוד…'; } else if (state === 'saving') { els.submitBtn.disabled = true; els.submitBtn.textContent = 'שומר…'; } else { els.submitBtn.disabled = false; els.submitBtn.textContent = '⬆️ שמור תיקון'; } };
+  // Build words array directly from current tokens, preserving timings/probabilities/newlines.
+  function buildWordsForSaveFromTokens(tokens) {
+    const out = [];
+    const src = Array.isArray(tokens) ? tokens : [];
+    for (const t of src) {
+      if (!t || t.state === 'del') continue;
+      const w = String(t.word || '');
+      const obj = { word: w };
+      const s = +t.start; if (Number.isFinite(s)) obj.start = s;
+      const e = +t.end;   if (Number.isFinite(e)) obj.end = e;
+      const p = +t.probability; if (Number.isFinite(p)) obj.probability = p;
+      out.push(obj);
+    }
+    return out;
+  }
+
+  // Legacy helper: build words from plain text while attempting to carry timings from source tokens when possible.
+  function buildWordsForSaveFromText(text) {
+    const s = String(text || '');
+    const out = [];
+    const st = getState();
+    const source = (st && Array.isArray(st.tokens) && st.tokens.length)
+      ? st.tokens
+      : (Array.isArray(st?.baselineTokens) ? st.baselineTokens : []);
+    let ti = 0; // scan index into source tokens
+
+    const tryCopyFromSource = (piece) => {
+      if (piece === '\n') { out.push({ word: '\n' }); return; }
+      // scan forward in source to find next token with exact text match
+      for (let j = ti; j < source.length; j++) {
+        const t = source[j];
+        if (!t || t.state === 'del') continue;
+        const w = String(t.word || '');
+        if (w === '\n') continue;
+        if (w === piece) {
+          ti = j + 1; // advance after match
+          const obj = { word: piece };
+          const sOK = Number.isFinite(+t.start);
+          const eOK = Number.isFinite(+t.end);
+          if (sOK) obj.start = +t.start;
+          if (eOK) obj.end = +t.end;
+          const p = +t.probability;
+          if (Number.isFinite(p)) obj.probability = p;
+          out.push(obj);
+          return;
+        }
+      }
+      // no match: push without timings/probability
+      out.push({ word: piece });
+    };
+
+    const lines = s.split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (line.length) {
+        const parts = line.split(/(\s+)/g);
+        for (const p of parts) { if (p) tryCopyFromSource(p); }
+      }
+      if (i < lines.length - 1) out.push({ word: '\n' });
+    }
+    return out;
+  }
   function getSelectionOffsets(container) {
     try {
       const sel = window.getSelection(); if (!sel || sel.rangeCount === 0) return null; const r = sel.getRangeAt(0);
@@ -217,6 +280,30 @@ export function setupUIControls(els, { workers }, virtualizer, playerCtrl, isIdl
     }
     return Math.max(0, seg);
   }
+  function computeWindowStats(tokens, segCenter, neighbors = 1) {
+    const startSeg = Math.max(0, (segCenter|0) - Math.max(0, neighbors|0));
+    const endSeg = (segCenter|0) + Math.max(0, neighbors|0);
+    let seg = 0;
+    let words = 0;
+    let minS = Infinity, maxE = -Infinity;
+    for (const t of (tokens || [])) {
+      if (!t || t.state === 'del') continue;
+      if (t.word === '\n') { seg++; continue; }
+      if (seg >= startSeg && seg <= endSeg) {
+        const w = String(t.word || '');
+        if (!/^\s+$/.test(w)) words++;
+        const s = Number.isFinite(+t.start) ? +t.start : NaN;
+        const e = Number.isFinite(+t.end) ? +t.end : NaN;
+        if (Number.isFinite(s)) minS = Math.min(minS, s);
+        if (Number.isFinite(e)) maxE = Math.max(maxE, e);
+      }
+    }
+    const seconds = (Number.isFinite(minS) && Number.isFinite(maxE) && maxE >= minS) ? (maxE - minS) : 0;
+    return { words, seconds };
+  }
+  const countWithTimings = (arr = []) => {
+    try { return (arr||[]).reduce((n,t)=> n + (((Number.isFinite(+t?.start) && +t.start>0) || (Number.isFinite(+t?.end) && +t.end>0)) ? 1 : 0), 0); } catch { return 0; }
+  };
   async function performSave() {
     if (saving) return; const st = getState(); const tokens = st.tokens && st.tokens.length ? st.tokens : (st.baselineTokens || []);
     if (!tokens.length) { showToast('אין מה לשמור', 'error'); setSaveButton('idle'); saveQueued = false; return; }
@@ -242,11 +329,41 @@ export function setupUIControls(els, { workers }, virtualizer, playerCtrl, isIdl
       }
       // Provide expectedBaseSha256 for authoritative hash-gate on backend: hash of parent text
       const expectedBaseSha256 = (latest?.text != null) ? await sha256Hex(String(latest.text)) : '';
-      // Use current tokens directly; alignment is handled server-side via endpoint
-      let wordsForSave = tokens;
-      const res = await saveTranscriptVersion(filePath, { parentVersion: parentVersionGuess, text, words: wordsForSave, expectedBaseSha256 });
+      // Prefer building words from tokens to preserve timings for unchanged tokens
+      let wordsForSave = buildWordsForSaveFromTokens(tokens);
+      const stats = computeWindowStats(tokens, segIdxGuess, 1);
+      dbg(`[dbg] save:start tokens=${tokens.length} with_timing=${countWithTimings(tokens)} seg=${segIdxGuess} window_words=${stats.words} window_sec=${stats.seconds.toFixed(3)}`);
+      try { showToast('מיישר תזמונים…', 'info'); } catch {}
+      const res = await saveTranscriptVersion(filePath, { parentVersion: parentVersionGuess, text, words: wordsForSave, expectedBaseSha256, segment: Math.max(0, segIdxGuess), neighbors: 1 });
       const childV = res?.version; const parentV = (typeof childV === 'number' && childV > 1) ? (childV - 1) : null;
+      dbg(`[dbg] save:done version=${childV} base_sha256=${res?.base_sha256 ? String(res.base_sha256).slice(0,8) : ''}`);
       store.setState({ version: childV || 0, base_sha256: res?.base_sha256 || st.base_sha256 || '' }, 'version:saved');
+      // Trigger alignment for the saved version and then refresh words
+      try {
+        if (typeof childV === 'number') {
+          try {
+            const ar = await alignSegment(filePath, { version: childV, segment: Math.max(0, segIdxGuess), neighbors: 1 });
+            const w = stats.words || 0; const sec = stats.seconds || 0;
+            dbg(`[dbg] align:resp ok=${!!(ar&&ar.ok)} changed=${+ar?.changed_count||0} total=${+ar?.total_compared||0}`);
+            if (ar && ar.ok) {
+              const ch = Number.isFinite(+ar.changed_count) ? +ar.changed_count : 0;
+              showToast(`מיישר תזמונים: ${w} מילים, ${sec.toFixed(1)} שניות — עודכנו ${ch}`, ch > 0 ? 'success' : 'info');
+            } else {
+              showToast(`מיישר תזמונים: ${w} מילים, ${sec.toFixed(1)} שניות — ללא שינוי`, 'info');
+            }
+          } catch (eAlign) {
+            const w = stats.words || 0; const sec = stats.seconds || 0;
+            dbg('[dbg] align failed:', eAlign?.message || eAlign);
+            showToast(`מיישר תזמונים: ${w} מילים, ${sec.toFixed(1)} שניות — שגיאה`, 'error');
+          }
+          const aligned = await getTranscriptWords(filePath, childV);
+          if (Array.isArray(aligned) && aligned.length) {
+            dbg(`[dbg] words:received count=${aligned.length} with_timing=${countWithTimings(aligned)} prev_with_timing=${countWithTimings(getState().tokens||[])}`);
+            store.setTokens(aligned);
+            store.setLiveText(aligned.map(t => t.word || '').join(''));
+          }
+        }
+      } catch {}
       try {
         if (typeof childV === 'number' && childV > 1) {
           // Re-fetch the actual parent by version (strongly consistent baseline)
@@ -263,21 +380,7 @@ export function setupUIControls(els, { workers }, virtualizer, playerCtrl, isIdl
         console.debug('Edit history save skipped:', eHist?.message || eHist);
       }
       showToast('השינויים נשמרו בהצלחה', 'success');
-      // After save, call backend to align neighborhood (n-1..n+1) and record timing diffs
-      try {
-        if (typeof childV === 'number' && Number.isFinite(segIdxGuess)) {
-          if (els.submitBtn) { els.submitBtn.disabled = true; els.submitBtn.textContent = 'מיישר תזמונים…'; }
-          const summary = await alignSegment({ doc: filePath, version: childV, segment: Math.max(0, segIdxGuess), neighbors: 1 });
-          const cnt = Number(summary?.changed_count || 0);
-          if (cnt > 0) showToast(`עודכנו ${cnt} תזמונים מקומיים`, 'success');
-          else showToast('לא אותרו שינויים בתזמון', 'info');
-        }
-      } catch (e) {
-        console.warn('alignSegment failed:', e);
-        try { showToast('יישור תזמונים נכשל', 'error'); } catch {}
-      } finally {
-        setSaveButton('idle');
-      }
+      setSaveButton('idle');
       // Verify version chain integrity (v1 + all ops → latest hash)
       try {
         const vRes = await verifyChainHash(filePath);
