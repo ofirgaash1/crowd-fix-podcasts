@@ -36,8 +36,20 @@ export function setupWordsPager(els, virtualizer, { chunkSegs = 50 } = {}) {
       const words = await api.getTranscriptWords(doc, version, { segment: seg, count: chunkSegs });
       if (!Array.isArray(words) || words.length === 0) break;
       all.push(...words);
-      virtualizer.setTokens(all);
-      try { store.setTokens(all); } catch {}
+      // Do not clobber if UI already has a longer or equal token list (e.g., post-align full fetch)
+      try {
+        const cur = store.getState();
+        const curLen = Array.isArray(cur.tokens) ? cur.tokens.length : 0;
+        if (curLen >= all.length) {
+          // skip updating; keep existing tokens
+        } else {
+          virtualizer.setTokens(all);
+          try { store.setTokens(all); } catch {}
+        }
+      } catch {
+        virtualizer.setTokens(all);
+        try { store.setTokens(all); } catch {}
+      }
       seg += chunkSegs;
       // small pause to keep UI responsive
       await new Promise(r => setTimeout(r, 20));
