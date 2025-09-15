@@ -1,6 +1,6 @@
-1. show "מיישר תזמונים" until we get a response from the endpoint
-2. make sure after we get the alignment and update the db successfuly, we pull the changes from the db and show the updated state of the document
-3. when the "השוואות" tab in the diff card is open and the user did some edit and saved it, and then the user navigates between files in the browser - the השוואות tab should update to show the current shown transcript (not to be stuck behind)
+1. show "מיישר תזמונים" until we get a response from the endpoint (done)
+2. make sure after we get the alignment and update the db successfuly, we pull the changes from the db and show the updated state of the document (done)
+3. when the "השוואות" tab in the diff card is open and the user did some edit and saved it, and then the user navigates between files in the browser - the השוואות tab should update to show the current shown transcript (not to be stuck behind) (done)
 4. it seems like after a successful alignment, the corrections are dropped/reverted to initial state in the transcript card (but not in the diff card where you can see the actual fixes, which means the data )
 5. log any Clamp end_time >= start_time.
 If rw.end or rw.start missing log it

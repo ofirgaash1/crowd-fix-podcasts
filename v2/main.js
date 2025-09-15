@@ -7,7 +7,7 @@ import { setupPlayerSync } from './player/sync.js';
 import { setupBrowser } from './data/browser.js';
 import { search as searchApi, fetchSegments as fetchSegApi, resultToEpisode } from './data/search.js';
 import { setupWordsPager } from './data/words-pager.js';
-import { setupShowLayers } from './history/show-layers.js';
+import { setupShowLayers, refreshLayers } from './history/show-layers.js';
 import { setupScrollSync, setupGutters } from './ui/layout.js';
 import { setupKaraokeFollow } from './player/karaoke.js';
 import { setupThemeToggle } from './ui/theme.js';
@@ -143,6 +143,7 @@ store.subscribe((state, tag) => {
   }
   if (tag === 'version:init' || tag === 'version:clear' || tag === 'version:saved') {
     updateVersionBadge();
+    try { refreshLayers(els, workers); } catch {}
   }
 });
 

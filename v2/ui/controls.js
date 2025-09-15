@@ -8,6 +8,18 @@ import { computeAbsIndexMap } from '../render/overlay.js';
 
 export function setupUIControls(els, { workers }, virtualizer, playerCtrl, isIdle) {
   const dbg = (...args) => { try { if ((localStorage.getItem('v2:debug') || '').toLowerCase() === 'on') console.log(...args); } catch {} };
+  const openAlignToast = () => {
+    try { showToast('מיישר תזמונים…', 'info', 60000); } catch {}
+  };
+  const closeAlignToasts = () => {
+    try {
+      const cont = document.getElementById('toastContainer'); if (!cont) return;
+      const list = Array.from(cont.querySelectorAll('.toast'));
+      for (const n of list) {
+        if ((n.textContent || '').trim().startsWith('מיישר תזמונים')) { try { n.remove(); } catch {} }
+      }
+    } catch {}
+  };
   // Probability highlight toggle
   if (els.probToggle) {
     const LS_KEY = 'probHL';
@@ -333,7 +345,7 @@ export function setupUIControls(els, { workers }, virtualizer, playerCtrl, isIdl
       let wordsForSave = buildWordsForSaveFromTokens(tokens);
       const stats = computeWindowStats(tokens, segIdxGuess, 1);
       dbg(`[dbg] save:start tokens=${tokens.length} with_timing=${countWithTimings(tokens)} seg=${segIdxGuess} window_words=${stats.words} window_sec=${stats.seconds.toFixed(3)}`);
-      try { showToast('מיישר תזמונים…', 'info'); } catch {}
+      openAlignToast();
       const res = await saveTranscriptVersion(filePath, { parentVersion: parentVersionGuess, text, words: wordsForSave, expectedBaseSha256, segment: Math.max(0, segIdxGuess), neighbors: 1 });
       const childV = res?.version; const parentV = (typeof childV === 'number' && childV > 1) ? (childV - 1) : null;
       dbg(`[dbg] save:done version=${childV} base_sha256=${res?.base_sha256 ? String(res.base_sha256).slice(0,8) : ''}`);
@@ -341,20 +353,24 @@ export function setupUIControls(els, { workers }, virtualizer, playerCtrl, isIdl
       // Trigger alignment for the saved version and then refresh words
       try {
         if (typeof childV === 'number') {
+          let alignMsg = null, alignType = 'info';
           try {
             const ar = await alignSegment(filePath, { version: childV, segment: Math.max(0, segIdxGuess), neighbors: 1 });
             const w = stats.words || 0; const sec = stats.seconds || 0;
             dbg(`[dbg] align:resp ok=${!!(ar&&ar.ok)} changed=${+ar?.changed_count||0} total=${+ar?.total_compared||0}`);
             if (ar && ar.ok) {
               const ch = Number.isFinite(+ar.changed_count) ? +ar.changed_count : 0;
-              showToast(`מיישר תזמונים: ${w} מילים, ${sec.toFixed(1)} שניות — עודכנו ${ch}`, ch > 0 ? 'success' : 'info');
+              alignMsg = `מיישר תזמונים: ${w} מילים, ${sec.toFixed(1)} שניות — עודכנו ${ch}`;
+              alignType = ch > 0 ? 'success' : 'info';
             } else {
-              showToast(`מיישר תזמונים: ${w} מילים, ${sec.toFixed(1)} שניות — ללא שינוי`, 'info');
+              alignMsg = `מיישר תזמונים: ${w} מילים, ${sec.toFixed(1)} שניות — ללא שינוי`;
+              alignType = 'info';
             }
           } catch (eAlign) {
             const w = stats.words || 0; const sec = stats.seconds || 0;
             dbg('[dbg] align failed:', eAlign?.message || eAlign);
-            showToast(`מיישר תזמונים: ${w} מילים, ${sec.toFixed(1)} שניות — שגיאה`, 'error');
+            alignMsg = `מיישר תזמונים: ${w} מילים, ${sec.toFixed(1)} שניות — שגיאה`;
+            alignType = 'error';
           }
           const aligned = await getTranscriptWords(filePath, childV);
           if (Array.isArray(aligned) && aligned.length) {
@@ -362,6 +378,9 @@ export function setupUIControls(els, { workers }, virtualizer, playerCtrl, isIdl
             store.setTokens(aligned);
             store.setLiveText(aligned.map(t => t.word || '').join(''));
           }
+          // Replace the long-running align toast with the final outcome now that words are fetched
+          closeAlignToasts();
+          if (alignMsg) { try { showToast(alignMsg, alignType); } catch {} }
         }
       } catch {}
       try {

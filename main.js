@@ -6,7 +6,7 @@ import { ScrollVirtualizer } from './render/virtualizer.js';
 import { setupPlayerSync } from './player/sync.js';
 import { setupBrowser } from './data/browser.js';
 import { setupSupabase } from './data/supabase-init.js';
-import { setupShowLayers } from './history/show-layers.js';
+import { setupShowLayers } from './v2/history/show-layers.js';
 import { setupScrollSync, setupGutters } from './ui/layout.js';
 import { setupKaraokeFollow } from './player/karaoke.js';
 import { setupSettingsModal } from './ui/settings-modal.js';
